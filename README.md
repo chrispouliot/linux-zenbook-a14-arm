@@ -52,7 +52,8 @@ Firmware is required by both the installer and the installed system. Keep a back
 <details>
 <summary><strong>Before booting the installer: Windows encryption, PIN, BIOS and boot menu</strong></summary>
 
-Read this before changing Secure Boot, whether you built the ISO on another computer or through WSL on the A14. If using WSL, finish building and writing the USB first; perform the encryption and firmware steps immediately before testing the USB.
+Windows Bitlocker won't function properly if you disable Secure Boot (required to boot Linux).
+Read this before changing Secure Boot in your BIOS, whether you built the ISO on another computer or through WSL on the A14. If using WSL, finish building and writing the USB first; perform the encryption and firmware steps immediately before testing the USB.
 
 **BitLocker recovery and your Windows sign-in PIN are different things.** Suspending BitLocker protection helps avoid recovery prompts caused by boot or firmware changes. It does not guarantee that Windows Hello will keep accepting your PIN. Fully decrypting the drive does not guarantee that either.
 
