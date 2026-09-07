@@ -1,0 +1,70 @@
+{
+  "model": "ASUS Zenbook A14 UX3407NA (Snapdragon X2 Elite / Glymur)",
+  "files": [
+    {
+      "name": "qcadsp8480.mbn",
+      "destination": "qcom/glymur/ASUSTeK/UX3407NA/qcadsp8480.mbn",
+      "referenceSha256": "23c2f7ae6eb7c0fb8b5c2a91e400b0d42c39786c2cd48b72f6c67b744f52b297"
+    },
+    {
+      "name": "qccdsp8480.mbn",
+      "destination": "qcom/glymur/ASUSTeK/UX3407NA/qccdsp8480.mbn",
+      "referenceSha256": "acf13d29288d283793f418a36650e8a261eed927d30de109a59cb2210f458794"
+    },
+    {
+      "name": "adsp_dtbs.elf",
+      "destination": "qcom/glymur/ASUSTeK/UX3407NA/adsp_dtbs.elf",
+      "referenceSha256": "ac6edd03107b33f67069afa879ee8ca03c4c4044489567304deb4e274f449597"
+    },
+    {
+      "name": "cdsp_dtbs.elf",
+      "destination": "qcom/glymur/ASUSTeK/UX3407NA/cdsp_dtbs.elf",
+      "referenceSha256": "9bee104a48d4aac647287d6c1454df170c1cff7158a2352711fd1e2163ea6d1d"
+    },
+    {
+      "name": "bdwlan_qcc2072_1p0_ncm820A.elf",
+      "destination": "ath12k/QCC2072/hw1.0/board.bin",
+      "referenceSha256": "960e9e93da708f5e1086ce15d82d3e44d846ec9441eac40e1725467d357965d8"
+    },
+    {
+      "name": "hmtbtfw20.tlv",
+      "destination": "qca/hmtbtfw20.tlv",
+      "referenceSha256": "7ee3f2b968d0616b67676a67e7c7e9de1e3fd0e4d4f96c5cc364650280563ad5"
+    },
+    {
+      "name": "hmtnv20.bin",
+      "destination": "qca/hmtnv20.bin",
+      "referenceSha256": "f0b2bd0050d1b8d935c9fad533352a9fbccccb47fafbd191d2044a8caacc4b7c"
+    },
+    {
+      "name": "hmtnv20.b3b",
+      "destination": "qca/hmtnv20.b3b",
+      "referenceSha256": "f0b2bd0050d1b8d935c9fad533352a9fbccccb47fafbd191d2044a8caacc4b7c"
+    },
+    {
+      "name": "hmtnv20.b105",
+      "destination": "qca/hmtnv20.b105",
+      "referenceSha256": "57c3cf985ff407606db950574daf639ca9f279bdd37675acccd7ad1d980761ef"
+    },
+    {
+      "name": "hmtnv20.b107",
+      "destination": "qca/hmtnv20.b107",
+      "referenceSha256": "57c3cf985ff407606db950574daf639ca9f279bdd37675acccd7ad1d980761ef"
+    },
+    {
+      "name": "hmtnv20.b108",
+      "destination": "qca/hmtnv20.b108",
+      "referenceSha256": "57c3cf985ff407606db950574daf639ca9f279bdd37675acccd7ad1d980761ef"
+    },
+    {
+      "name": "hmtnv20.b10f",
+      "destination": "qca/hmtnv20.b10f",
+      "referenceSha256": "3af0e8c65c3f119a2380820a24af4979d5affc2751a22170ecd9f318e25e77ff"
+    },
+    {
+      "name": "hmtnv20.b112",
+      "destination": "qca/hmtnv20.b112",
+      "referenceSha256": "6cc9e4609bde5cba32460ecd691ed39bcf2de14d6ae59e501c9c9fc637c54b4b"
+    }
+  ]
+}

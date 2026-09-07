@@ -1,0 +1,44 @@
+/*
+ * ASUS Zenbook A14 UX3407NA audio overrides.
+ *
+ * Keep only the two physical WSA8845 codecs attached to swr0 and add
+ * the built-in HDMI audio backend. The HDMI connector is fed by
+ * mdss_dp2 through the Parade PS185 HDMI bridge.
+ */
+
+&{/sound} {
+	audio-routing =
+		"WooferLeft IN", "WSA WSA_SPK1 OUT",
+		"TweeterLeft IN", "WSA WSA_SPK2 OUT",
+		"VA DMIC0", "vdd-micb",
+		"VA DMIC1", "vdd-micb",
+		"VA DMIC2", "vdd-micb",
+		"VA DMIC3", "vdd-micb";
+
+	wsa-dai-link {
+		codec {
+			sound-dai = <&left_woofer>, <&left_tweeter>,
+				    <&swr0 0>, <&lpass_wsamacro 0>;
+		};
+	};
+
+	displayport-2-dai-link {
+		link-name = "DisplayPort2 Playback";
+
+		cpu {
+			sound-dai = <&q6apmbedai DISPLAY_PORT_RX_2>;
+		};
+
+		codec {
+			sound-dai = <&mdss_dp2>;
+		};
+
+		platform {
+			sound-dai = <&q6apm>;
+		};
+	};
+};
+
+&mdss_dp2 {
+	sound-name-prefix = "DisplayPort2";
+};

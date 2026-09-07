@@ -1,0 +1,60 @@
+--- a/drivers/phy/qualcomm/phy-qcom-qmp-combo.c
++++ b/drivers/phy/qualcomm/phy-qcom-qmp-combo.c
+@@ -3985,11 +3985,47 @@
+ 	return 0;
+ }
+ 
++/* Called with phy_mutex held during DP power-on. */
++static void qmp_combo_dp_configure_bank0(struct qmp_combo *qmp)
++{
++	const struct qmp_phy_cfg *cfg = qmp->cfg;
++	const struct qmp_phy_init_tbl *entry;
++	int i;
++
++	if (cfg != &glymur_usb3dpphy_cfg || !qmp->usb_init_count ||
++	    qmp->qmpphy_mode != QMPPHY_MODE_USB3DP ||
++	    qmp->dp_opts.lanes != 2 ||
++	    qmp->orientation != TYPEC_ORIENTATION_NORMAL) {
++		qmp_configure_lane(qmp->dev, qmp->dp_tx,
++				   cfg->dp_tx_tbl, cfg->dp_tx_tbl_num, 1);
++		return;
++	}
++
++	/*
++	 * In this Glymur USB3+DP configuration, rewriting the bank0 TX-enable
++	 * and HIGHZ controls during DP startup can disrupt an existing USB
++	 * connection. Preserve their current values across table programming.
++	 * The remaining table writes and subsequent PHY configuration still run.
++	 */
++	for (i = 0; i < cfg->dp_tx_tbl_num; i++) {
++		entry = &cfg->dp_tx_tbl[i];
++		if (!(entry->lane_mask & 1))
++			continue;
++
++		if ((entry->offset == QSERDES_V8_LALB_TRANSMITTER_EN_CTRL &&
++		     entry->val == 0x1a) ||
++		    (entry->offset == QSERDES_V8_LALB_HIGHZ_DRVR_EN &&
++		     entry->val == 0x3f))
++			continue;
++
++		qmp_configure_lane(qmp->dev, qmp->dp_tx, entry, 1, 1);
++	}
++}
++
+ static int qmp_combo_dp_power_on(struct phy *phy)
+ {
+ 	struct qmp_combo *qmp = phy_get_drvdata(phy);
+ 	const struct qmp_phy_cfg *cfg = qmp->cfg;
+-	void __iomem *tx = qmp->dp_tx;
+ 	void __iomem *tx2 = qmp->dp_tx2;
+ 	int ret;
+ 
+@@ -4006,7 +4042,7 @@
+ 
+ 	qmp_combo_dp_serdes_init(qmp);
+ 
+-	qmp_configure_lane(qmp->dev, tx, cfg->dp_tx_tbl, cfg->dp_tx_tbl_num, 1);
++	qmp_combo_dp_configure_bank0(qmp);
+ 	qmp_configure_lane(qmp->dev, tx2, cfg->dp_tx_tbl, cfg->dp_tx_tbl_num, 2);
+ 
+ 	/* Configure special DP tx tunings */

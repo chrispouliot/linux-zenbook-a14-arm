@@ -1,0 +1,101 @@
+/*
+ * Post-July 2026 ASUS Zenbook A14 Glymur bring-up fixes.
+ *
+ * Adds:
+ * - USB clock rates, power-domain performance votes, interconnect
+ *   bandwidth paths and coherent DMA properties.
+ * - SCMI polling workaround required for CPU frequency scaling.
+ * - Factory NCM820A Bluetooth firmware selection.
+ */
+
+&usb_0 {
+	assigned-clocks = <&gcc GCC_USB30_PRIM_MOCK_UTMI_CLK>,
+			  <&gcc GCC_USB30_PRIM_MASTER_CLK>;
+	assigned-clock-rates = <19200000>, <200000000>;
+
+	required-opps = <&rpmhpd_opp_nom>;
+
+	interconnects = <&aggre4_noc MASTER_USB3_0 QCOM_ICC_TAG_ALWAYS
+			 &mc_virt SLAVE_EBI1 QCOM_ICC_TAG_ALWAYS>,
+			<&hsc_noc MASTER_APPSS_PROC QCOM_ICC_TAG_ACTIVE_ONLY
+			 &config_noc SLAVE_USB3_0 QCOM_ICC_TAG_ACTIVE_ONLY>;
+	interconnect-names = "usb-ddr", "apps-usb";
+
+	dma-coherent;
+};
+
+&usb_1 {
+	assigned-clocks = <&gcc GCC_USB30_SEC_MOCK_UTMI_CLK>,
+			  <&gcc GCC_USB30_SEC_MASTER_CLK>;
+	assigned-clock-rates = <19200000>, <200000000>;
+
+	required-opps = <&rpmhpd_opp_nom>;
+
+	interconnects = <&aggre4_noc MASTER_USB3_1 QCOM_ICC_TAG_ALWAYS
+			 &mc_virt SLAVE_EBI1 QCOM_ICC_TAG_ALWAYS>,
+			<&hsc_noc MASTER_APPSS_PROC QCOM_ICC_TAG_ACTIVE_ONLY
+			 &config_noc SLAVE_USB3_1 QCOM_ICC_TAG_ACTIVE_ONLY>;
+	interconnect-names = "usb-ddr", "apps-usb";
+
+	dma-coherent;
+};
+
+&usb_2 {
+	assigned-clocks = <&gcc GCC_USB30_TERT_MOCK_UTMI_CLK>,
+			  <&gcc GCC_USB30_TERT_MASTER_CLK>;
+	assigned-clock-rates = <19200000>, <200000000>;
+
+	required-opps = <&rpmhpd_opp_nom>;
+
+	interconnects = <&aggre2_noc MASTER_USB3_2 QCOM_ICC_TAG_ALWAYS
+			 &mc_virt SLAVE_EBI1 QCOM_ICC_TAG_ALWAYS>,
+			<&hsc_noc MASTER_APPSS_PROC QCOM_ICC_TAG_ACTIVE_ONLY
+			 &config_noc SLAVE_USB3_2 QCOM_ICC_TAG_ACTIVE_ONLY>;
+	interconnect-names = "usb-ddr", "apps-usb";
+
+	dma-coherent;
+};
+
+&usb_hs {
+	dma-coherent;
+};
+
+&usb_mp {
+	assigned-clocks = <&gcc GCC_USB30_MP_MOCK_UTMI_CLK>,
+			  <&gcc GCC_USB30_MP_MASTER_CLK>;
+	assigned-clock-rates = <19200000>, <200000000>;
+
+	required-opps = <&rpmhpd_opp_nom>;
+
+	interconnects = <&aggre3_noc MASTER_USB3_MP QCOM_ICC_TAG_ALWAYS
+			 &mc_virt SLAVE_EBI1 QCOM_ICC_TAG_ALWAYS>,
+			<&hsc_noc MASTER_APPSS_PROC QCOM_ICC_TAG_ACTIVE_ONLY
+			 &config_noc SLAVE_USB3_MP QCOM_ICC_TAG_ACTIVE_ONLY>;
+	interconnect-names = "usb-ddr", "apps-usb";
+
+	dma-coherent;
+};
+
+/*
+ * Glymur CPUCP writes valid SCMI replies into shared memory but does
+ * not reliably signal the completion interrupt. Poll the shared
+ * memory transport instead, allowing the SCMI performance protocol
+ * and scmi-cpufreq to probe.
+ */
+&{/firmware/scmi} {
+	arm,no-completion-irq;
+};
+
+/*
+ * The NCM820A uses a QCC2072 Bluetooth controller.
+ *
+ * The current A14 DTS identifies it as qcom,wcn7850-bt, which makes
+ * hci_qca select the HMT firmware family. Override the compatible so
+ * the QCC2072 path is used and the driver selects the ORN firmware
+ * shipped by linux-firmware.
+ */
+ &uart14 {
+	bluetooth {
+		compatible = "qcom,qcc2072-bt";
+	};
+};

@@ -1,0 +1,61 @@
+Subject: [DIAGNOSTIC] firmware: arm_scmi: test mailbox performance writes on A14
+
+Target source: linux-msm/laptops-kernel
+Revision: 51231839d5ef007638bd1c3500e6a76b337a66f3
+
+On the tested A14, policy6 writes indices 4 / 20 / 4 via fast channels,
+while frequency reads stay at index 13 and CPU6 AMU average stays near
+3.434 GHz. No normal performance-message transfers occur in the trace.
+
+Keep fast-channel reads, limits, level conversion and OPPs unchanged.
+Skip mapping the performance-level SET fast channel. The existing
+mailbox setter is then selected, and fast_switch_possible returns false
+so cpufreq uses its slow path. The existing DT polling workaround applies
+to these regular messages.
+
+This diagnostic defaults on in this patched kernel. For a boot-time A/B
+comparison, scmi_module.a14_perf_mailbox_set=0 retains the original path.
+The parameter is read-only after boot because mapping happens at probe.
+
+Mailbox success/failure and actual clock response still require testing
+on the laptop. This is not an established upstream fix.
+
+--- a/drivers/firmware/arm_scmi/perf.c
++++ b/drivers/firmware/arm_scmi/perf.c
+@@ -28,6 +28,12 @@
+ #define SCMI_PROTOCOL_SUPPORTED_VERSION		0x40000
+ 
+ #define MAX_OPPS		64
++
++/* Diagnostic for the A14: retain FC reads but acknowledge level writes. */
++static bool a14_perf_mailbox_set = true;
++module_param(a14_perf_mailbox_set, bool, 0444);
++MODULE_PARM_DESC(a14_perf_mailbox_set,
++		"A14 diagnostic: send performance level writes through SCMI messages");
+ 
+ enum scmi_performance_protocol_cmd {
+ 	PERF_DOMAIN_ATTRIBUTES = 0x3,
+@@ -844,12 +850,22 @@
+ 				   &fc[PERF_FC_LIMIT].get_addr, NULL,
+ 				   &fc[PERF_FC_LIMIT].rate_limit);
+ 
+-	if (dom->info.set_perf)
++	/*
++	 * Leave set_addr NULL to select the existing mailbox setter and make
++	 * scmi_fast_switch_possible() return false. Keep fast-channel reads:
++	 * this test changes only how performance level writes reach firmware.
++	 */
++	if (dom->info.set_perf && !a14_perf_mailbox_set)
+ 		ph->hops->fastchannel_init(ph, PERF_DESCRIBE_FASTCHANNEL,
+ 					   PERF_LEVEL_SET, 4, dom->id,
+ 					   &fc[PERF_FC_LEVEL].set_addr,
+ 					   &fc[PERF_FC_LEVEL].set_db,
+ 					   &fc[PERF_FC_LEVEL].rate_limit);
++
++	if (dom->info.set_perf && a14_perf_mailbox_set)
++		dev_info(ph->dev,
++			 "A14-SCMI: domain %u PERF_LEVEL_SET uses mailbox; fast switching disabled\n",
++			 dom->id);
+ 
+ 	if (dom->set_limits)
+ 		ph->hops->fastchannel_init(ph, PERF_DESCRIBE_FASTCHANNEL,

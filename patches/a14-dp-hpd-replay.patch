@@ -1,0 +1,135 @@
+diff --git a/drivers/gpu/drm/bridge/aux-hpd-bridge.c b/drivers/gpu/drm/bridge/aux-hpd-bridge.c
+index a2e525aa5..3f7aa6b13 100644
+--- a/drivers/gpu/drm/bridge/aux-hpd-bridge.c
++++ b/drivers/gpu/drm/bridge/aux-hpd-bridge.c
+@@ -5,8 +5,10 @@
+  * Author: Dmitry Baryshkov <dmitry.baryshkov@linaro.org>
+  */
+ #include <linux/auxiliary_bus.h>
++#include <linux/devm-helpers.h>
+ #include <linux/export.h>
+ #include <linux/module.h>
++#include <linux/mutex.h>
+ #include <linux/of.h>
+ 
+ #include <drm/drm_atomic_helper.h>
+@@ -18,6 +20,12 @@ static DEFINE_IDA(drm_aux_hpd_bridge_ida);
+ struct drm_aux_hpd_bridge_data {
+ 	struct drm_bridge bridge;
+ 	struct device *dev;
++	/* Protects status, status_valid and hpd_enabled. */
++	struct mutex status_lock;
++	struct work_struct replay_work;
++	enum drm_connector_status status;
++	bool status_valid;
++	bool hpd_enabled;
+ };
+ 
+ static void drm_aux_hpd_bridge_release(struct device *dev)
+@@ -136,6 +144,53 @@ struct device *drm_dp_hpd_bridge_register(struct device *parent, struct device_n
+ }
+ EXPORT_SYMBOL_GPL(drm_dp_hpd_bridge_register);
+ 
++static void drm_aux_hpd_bridge_replay_work(struct work_struct *work)
++{
++	struct drm_aux_hpd_bridge_data *data =
++		container_of(work, struct drm_aux_hpd_bridge_data, replay_work);
++	enum drm_connector_status status;
++
++	mutex_lock(&data->status_lock);
++	if (!data->hpd_enabled || !data->status_valid) {
++		mutex_unlock(&data->status_lock);
++		return;
++	}
++
++	status = data->status;
++	data->status_valid = false;
++	dev_info(data->dev, "A14-DP: replaying cached AUX HPD status=%d\n",
++		 status);
++	drm_bridge_hpd_notify(&data->bridge, status);
++	mutex_unlock(&data->status_lock);
++}
++
++static void drm_aux_hpd_bridge_hpd_enable(struct drm_bridge *bridge)
++{
++	struct drm_aux_hpd_bridge_data *data =
++		container_of(bridge, struct drm_aux_hpd_bridge_data, bridge);
++	bool replay;
++
++	mutex_lock(&data->status_lock);
++	data->hpd_enabled = true;
++	replay = data->status_valid;
++	mutex_unlock(&data->status_lock);
++
++	if (replay)
++		schedule_work(&data->replay_work);
++}
++
++static void drm_aux_hpd_bridge_hpd_disable(struct drm_bridge *bridge)
++{
++	struct drm_aux_hpd_bridge_data *data =
++		container_of(bridge, struct drm_aux_hpd_bridge_data, bridge);
++
++	mutex_lock(&data->status_lock);
++	data->hpd_enabled = false;
++	mutex_unlock(&data->status_lock);
++
++	cancel_work_sync(&data->replay_work);
++}
++
+ /**
+  * drm_aux_hpd_bridge_notify - notify hot plug detection events
+  * @dev: device created for the HPD bridge
+@@ -154,7 +209,21 @@ void drm_aux_hpd_bridge_notify(struct device *dev, enum drm_connector_status sta
+ 	if (!data)
+ 		return;
+ 
++	mutex_lock(&data->status_lock);
++	if (!data->hpd_enabled) {
++		data->status = status;
++		data->status_valid = true;
++		dev_info_ratelimited(data->dev,
++				     "A14-DP: caching AUX HPD status=%d until DRM enables HPD\n",
++				     status);
++		mutex_unlock(&data->status_lock);
++		return;
++	}
++
++	/* A live event supersedes any replay that has not started yet. */
++	data->status_valid = false;
+ 	drm_bridge_hpd_notify(&data->bridge, status);
++	mutex_unlock(&data->status_lock);
+ }
+ EXPORT_SYMBOL_GPL(drm_aux_hpd_bridge_notify);
+ 
+@@ -170,12 +239,15 @@ static const struct drm_bridge_funcs drm_aux_hpd_bridge_funcs = {
+ 	.atomic_destroy_state = drm_atomic_helper_bridge_destroy_state,
+ 	.atomic_duplicate_state = drm_atomic_helper_bridge_duplicate_state,
+ 	.attach	= drm_aux_hpd_bridge_attach,
++	.hpd_enable = drm_aux_hpd_bridge_hpd_enable,
++	.hpd_disable = drm_aux_hpd_bridge_hpd_disable,
+ };
+ 
+ static int drm_aux_hpd_bridge_probe(struct auxiliary_device *auxdev,
+ 				    const struct auxiliary_device_id *id)
+ {
+ 	struct drm_aux_hpd_bridge_data *data;
++	int ret;
+ 
+ 	data = devm_drm_bridge_alloc(&auxdev->dev,
+ 				     struct drm_aux_hpd_bridge_data, bridge,
+@@ -183,6 +255,13 @@ static int drm_aux_hpd_bridge_probe(struct auxiliary_device *auxdev,
+ 	if (IS_ERR(data))
+ 		return PTR_ERR(data);
+ 
++	ret = devm_work_autocancel(&auxdev->dev, &data->replay_work,
++				   drm_aux_hpd_bridge_replay_work);
++	if (ret)
++		return ret;
++
++	mutex_init(&data->status_lock);
++	data->status = connector_status_unknown;
+ 	data->dev = &auxdev->dev;
+ 	data->bridge.of_node = dev_get_platdata(data->dev);
+ 	data->bridge.ops = DRM_BRIDGE_OP_HPD;
+

@@ -1,0 +1,7 @@
+result
+result-*
+__pycache__/
+*.pyc
+firmware/*
+!firmware/README.md
+private-firmware/

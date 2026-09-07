@@ -1,0 +1,93 @@
+{
+  "nodes": {
+    "audioreach-topology": {
+      "flake": false,
+      "locked": {
+        "lastModified": 1788278954,
+        "narHash": "sha256-3+yp/crVjAZilFZ/tvE6Ab8AJZOxjE0b8XGtH5hOKsQ=",
+        "owner": "linux-msm",
+        "repo": "audioreach-topology",
+        "rev": "e7b20b2b16cdda18eb8ae143c8d95c4815c0288e",
+        "type": "github"
+      },
+      "original": {
+        "owner": "linux-msm",
+        "repo": "audioreach-topology",
+        "type": "github"
+      }
+    },
+    "glymur-kernel": {
+      "flake": false,
+      "locked": {
+        "lastModified": 1785520824,
+        "narHash": "sha256-tP8SJ96siyJV1jeefwgAURK6qGeJZAj9hvbjqMTWq68=",
+        "owner": "linux-msm",
+        "repo": "laptops-kernel",
+        "rev": "51231839d5ef007638bd1c3500e6a76b337a66f3",
+        "type": "github"
+      },
+      "original": {
+        "owner": "linux-msm",
+        "repo": "laptops-kernel",
+        "rev": "51231839d5ef007638bd1c3500e6a76b337a66f3",
+        "type": "github"
+      }
+    },
+    "linux-firmware-qcc2072": {
+      "flake": false,
+      "locked": {
+        "lastModified": 1786555866,
+        "narHash": "sha256-/XeMJF6f7T6sgaB6pxw1ZEEYi52AZ6VZuO6lsthgy/Y=",
+        "ref": "refs/heads/main",
+        "rev": "25c06030aa434817928ace452c06f095f14729d3",
+        "revCount": 6437,
+        "type": "git",
+        "url": "https://gitlab.com/kernel-firmware/linux-firmware.git"
+      },
+      "original": {
+        "rev": "25c06030aa434817928ace452c06f095f14729d3",
+        "type": "git",
+        "url": "https://gitlab.com/kernel-firmware/linux-firmware.git"
+      }
+    },
+    "nixpkgs": {
+      "locked": {
+        "lastModified": 1788179007,
+        "narHash": "sha256-hn1oU2rue2SYK8dAr8+WNZWtbsz1S2W5mnHlSEuh3bo=",
+        "owner": "NixOS",
+        "repo": "nixpkgs",
+        "rev": "34ab99075ac4f7e40cf037eef32cb1c360bb85e9",
+        "type": "github"
+      },
+      "original": {
+        "owner": "NixOS",
+        "ref": "nixos-unstable",
+        "repo": "nixpkgs",
+        "type": "github"
+      }
+    },
+    "root": {
+      "inputs": {
+        "audioreach-topology": "audioreach-topology",
+        "glymur-kernel": "glymur-kernel",
+        "linux-firmware-qcc2072": "linux-firmware-qcc2072",
+        "nixpkgs": "nixpkgs",
+        "windows-firmware": "windows-firmware"
+      }
+    },
+    "windows-firmware": {
+      "flake": false,
+      "locked": {
+        "path": "./firmware",
+        "type": "path"
+      },
+      "original": {
+        "path": "./firmware",
+        "type": "path"
+      },
+      "parent": []
+    }
+  },
+  "root": "root",
+  "version": 7
+}

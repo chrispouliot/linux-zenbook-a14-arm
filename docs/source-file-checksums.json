@@ -1,0 +1,13 @@
+{
+  "kernel.nix": "dab3715ba11b859fd216f1667062c8dc08c9d6a2ded8be1676f0176e6649a9a0",
+  "patches/a14-audio-left-only.dtsi": "e6ed1b6a7e25023b1963a57024f63af9bd9b7a7bc777f5b8d7541017236acaf4",
+  "patches/a14-dp-boot-order-debug.patch": "b9a07444e91beee45fb358dab9280b23d863189f8cc593c60d81375ea4f81ba9",
+  "patches/a14-dp-hpd-replay.patch": "ed934234981a890a544ceabb0c7a38cdd4dd0994bb5329fa704a342bbbd695d0",
+  "patches/a14-dp-usb-preserve-bank0.patch": "f8893386321d90a5f5d9012c4ea404c20e269fb20d113cc22604e1b8a74a4e71",
+  "patches/a14-ec-overlay.dts": "a57f56c2296c4229c351d3695fb63ce5499123c4cf8727b5157aa9758128b8ed",
+  "patches/a14-edp-hbr.dtsi": "b1c726bcdf965201854a1edd4b16ec787dc9da857d93321351df2dea09a27048",
+  "patches/a14-glymur-ucsi-dp-mux-race.patch": "4febfb45c607fa9da8c282f50875570b30c12b11a670d4b84cf8a7f05fe982ef",
+  "patches/a14-hdmi-topology.m4": "00b78c65a056bba9d9c4f0293a57112be4afb27201f9b1f6bed79b0fbe848b88",
+  "patches/a14-scmi-mailbox-set-test.patch": "54ee89c4b632550a89d58f23a431141b459b174912b7b5c090c4bcbfe567d5ee",
+  "patches/a14-usb-fix.dtsi": "45bbcc269cabd50f66054f46e91712f384b3871dfd0023cda36095249f54f466"
+}

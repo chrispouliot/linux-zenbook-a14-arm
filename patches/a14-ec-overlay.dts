@@ -1,0 +1,36 @@
+/dts-v1/;
+/plugin/;
+
+/ {
+	compatible = "asus,zenbook-a14-ux3407na", "qcom,glymur";
+};
+
+&i2c9 {
+	clock-frequency = <400000>;
+	status = "okay";
+
+	embedded-controller@76 {
+		compatible = "asus,zenbook-a14-ux3407na-ec";
+		reg = <0x76>;
+
+		interrupts-extended = <&tlmm 66 2>;
+
+		pinctrl-0 = <&ec_int_n_default>;
+		pinctrl-names = "default";
+
+		#thermal-sensor-cells = <1>;
+		wakeup-source;
+	};
+};
+
+&tlmm {
+	ec_int_n_default: ec-int-n-state {
+		pins = "gpio66";
+		function = "gpio";
+		bias-disable;
+	};
+};
+
+&{/soc@0/arbiter@c400000/spmi@c426000/pmic@0/rtc@6100} {
+	qcom,uefi-rtc-info;
+};

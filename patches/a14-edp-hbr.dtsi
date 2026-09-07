@@ -1,0 +1,8 @@
+/*
+ * Work around intermittent internal eDP HBR2 link-training failure
+ * after s2idle by limiting the panel to HBR/2.7 Gbps.
+ */
+&mdss_dp3_out {
+	/delete-property/ link-frequencies;
+	link-frequencies = /bits/ 64 <1620000000 2700000000>;
+};
