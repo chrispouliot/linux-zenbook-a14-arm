@@ -4,11 +4,153 @@ Linux/NixOS hardware support for the **ASUS Zenbook A14 UX3407NA with Snapdragon
 
 The project builds an ARM64 NixOS installer ISO, which can be used to install either NixOS or Arch on your A14. It currently uses the pinned **7.2.0-rc5-next-20260731** Glymur kernel. Support is still evolving; see the [hardware notes](docs/hardware.md) for current limitations, including external display link limits. Earlier Snapdragon X1 A14 models are outside this project's scope.
 
+## Current hardware status
+
+Status reflects the currently used **NixOS configuration on the UX3407NA with the project's patched Glymur kernel and required firmware**. It does not mean the new installer ISO or every peripheral has been validated. Arch users also need the equivalent userspace configuration, particularly for audio.
+
+| Feature | Status | Patches, workarounds or remaining limitations |
+| --- | --- | --- |
+| Internal display | Working with workaround | The eDP link is capped at HBR / 2.7 Gbit/s per lane to address the black screen after suspend. |
+| Keyboard and Fn keys | Working with patches | Keyboard Fn-lock support enables the intended media-key and F1–F12 behavior. |
+| Touchpad | Working | Uses the board device tree and early I2C/HID drivers. |
+| Battery information and charging | Working | Uses the ASUS embedded-controller overlay and Qualcomm power-supply support. |
+| Wi-Fi | Working with firmware | Requires QCC2072 runtime firmware and the ASUS-specific Windows board file. DFS-channel connectivity has shown problems; use a non-DFS channel if affected. |
+| Bluetooth | Working with firmware and device-tree fix | Requires the matching Windows Bluetooth files and QCC2072 device description. |
+| Internal speakers | Working with patches and configuration | Corrected codec mapping, stereo routing, AudioReach topology and ALSA/PipeWire configuration are included. SoundWire power management also has a workaround. |
+| HDMI video | Working on tested setup | Uses the retained display/PHY fixes. Supported modes depend on the output path and its link limits. |
+| HDMI audio | Working with patches and configuration | Requires the HDMI audio backend, topology, routing and hotplug helper. |
+| USB peripherals | Working on tested connections | USB clock, power-domain and PHY fixes are included. Selected VIA hubs also use power-management workarounds. This does not establish USB4 support. |
+| Dock Ethernet across suspend/resume | Working with patches on tested dock | Shared USB/DP PHY changes preserve the USB connection in the tested suspend/resume setup. Other docks still need testing. |
+| USB-C DisplayPort / external-display hotplug | Partial | Output works through the tested dock, but direct USB-C DP, hotplug and resume remain experimental. The affected DP1 path is capped at HBR; do not assume unrestricted 4K60 support. |
+| Suspend/resume | Working with workarounds; setup-dependent | Uses s2idle, the internal-display link cap, USB-C power-domain retention and display/PHY fixes. External displays, docks and audio need testing in each setup. |
+| CPU performance | Partial | CPU governors are available, but single-core performance remains below Windows in testing. The optional SCMI mailbox patch is diagnostic, not a proven fix. |
+| Webcam | Not working | Not supported by the current project configuration. |
+| Internal microphone | Not working | Not working in the current configuration, despite the microphone-related paths present in the audio topology. |
+| USB4 | Not working | Native USB4 operation is not working. USB peripherals or display output working through a USB4-capable dock does not mean its USB4 features are operating. |
+
+See [Included patches](#included-patches) for individual changes and [hardware notes](docs/hardware.md) for options and limitations. “Working” describes the tested setup, not a guarantee that all hardware combinations are issue-free.
+
 ## Before you start
 
 You can create the ISO on **another Linux computer**, or **on the A14 itself while it is running Windows by using WSL2**. Both routes use Nix with flakes enabled; the guides include the setup steps. If the A14 is your only computer, start with the Windows installation steps. You will need the **Windows firmware files from your UX3407NA**. Follow the [firmware guide](docs/firmware.md), which includes collectors for Windows and Linux.
 
 Firmware is required by both the installer and the installed system. Keep a backup of the extracted directory; it is not included in this public repository.
+
+**Before changing Secure Boot or booting the USB**, complete the Windows and boot preparation below. It applies to all three installation routes.
+
+<a id="windows-and-boot-preparation"></a>
+
+<details>
+<summary><strong>Before booting the installer: Windows encryption, PIN, BIOS and boot menu</strong></summary>
+
+Read this before changing Secure Boot, whether you built the ISO on another computer or through WSL on the A14. If using WSL, finish building and writing the USB first; perform the encryption and firmware steps immediately before testing the USB.
+
+**BitLocker recovery and your Windows sign-in PIN are different things.** Suspending BitLocker protection helps avoid recovery prompts caused by boot or firmware changes. It does not guarantee that Windows Hello will keep accepting your PIN. Fully decrypting the drive does not guarantee that either.
+
+**1. Back up your files, firmware and Windows recovery information**
+
+Keep copies of your important files and extracted A14 firmware somewhere separate from the Windows SSD and the USB drive you are about to overwrite.
+
+If Windows encryption is enabled, retrieve its **48-digit BitLocker recovery key** and keep it accessible from another device or on paper. Match it to this device's key ID; do not rely on a copy stored only on the encrypted laptop. See [Microsoft's recovery-key instructions](https://support.microsoft.com/en-us/windows/security/encryption/find-your-bitlocker-recovery-key).
+
+**2. Make sure you can sign into Windows without relying only on the PIN**
+
+Know your Windows account password and confirm access to your Microsoft account's recovery email, phone or authenticator before changing firmware settings.
+
+If your account has a password but Windows hides password sign-in, open **Settings → Accounts → Sign-in options** and turn off the Windows Hello-only sign-in setting if available. Lock the screen and test the password through **Sign-in options** before proceeding. For a passwordless account, confirm your account-recovery method instead. [Microsoft's sign-in options](https://support.microsoft.com/en-us/accounts-billing/security/sign-in-options-in-windows).
+
+If Windows later reports that the PIN is unavailable, use password sign-in where offered, or the **I forgot my PIN / Set up my PIN** flow to verify your account and create a new PIN. This may require an internet connection. Do not treat decrypting the SSD as a fix for a Windows Hello problem. [Microsoft's PIN reset instructions](https://support.microsoft.com/en-us/windows/security/change-or-reset-your-pin-in-windows).
+
+**3. Check encryption and choose suspension or decryption**
+
+In **Windows PowerShell as Administrator**, check the Windows system drive:
+
+```powershell
+manage-bde -status C:
+```
+
+Check both **Conversion Status** and **Protection Status**. A suspended drive can still be encrypted: **Protection Off** alone does not mean decryption has finished. [Microsoft's status command](https://learn.microsoft.com/en-us/windows-server/administration/windows-commands/manage-bde-status).
+
+| Your situation | What to do |
+| --- | --- |
+| The drive is already fully decrypted | No BitLocker suspension is needed. Keep the account-recovery preparation above. |
+| You want to keep Windows encrypted while changing firmware settings | Temporarily suspend protection using option A below. |
+| You deliberately want Windows encryption removed | Use option B and wait for decryption to finish. This is optional, not a requirement for building the ISO. |
+
+**Option A — temporarily suspend protection**
+
+On Windows editions providing the BitLocker PowerShell commands, run:
+
+```powershell
+Suspend-BitLocker -MountPoint "C:" -RebootCount 0
+manage-bde -status C:
+```
+
+Confirm that protection is off before changing Secure Boot. `-RebootCount 0` keeps protection suspended until you manually resume it; the data remains encrypted, but its key is temporarily unprotected. Do not leave a retained Windows installation in this state indefinitely. [Microsoft's suspension instructions](https://learn.microsoft.com/en-us/troubleshoot/windows-client/windows-security/suspend-bitlocker-protection-non-microsoft-updates).
+
+If that command is unavailable, check **Manage BitLocker → Suspend protection**. UI suspension may resume after a restart, so recheck its status before further changes. Some Windows Home devices expose only Device encryption; if suspension is unavailable, use the supported decryption option below or obtain instructions for that edition before changing Secure Boot.
+
+**Option B — turn off encryption and decrypt the drive**
+
+Choose the interface available on your Windows installation:
+
+* **Device encryption:** open **Settings → Privacy & security → Device encryption**, turn it off, and confirm.
+* **BitLocker Drive Encryption:** search for **Manage BitLocker**, choose **Turn off BitLocker** for the Windows drive, and confirm decryption.
+
+Keep the laptop connected to power and wait for completion before changing Secure Boot. Check again with `manage-bde -status C:`; expect **Fully Decrypted** and **0.0% encrypted** (wording may be localized). Turning encryption off removes its protection of the Windows data at rest. [ASUS's decryption instructions](https://www.asus.com/support/faq/1047461/).
+
+**4. Open BIOS/UEFI settings or the boot-device menu**
+
+These are separate screens: BIOS/UEFI settings contain Secure Boot controls; the boot-device menu chooses the USB or an installed operating system.
+
+| Goal | Keyboard method |
+| --- | --- |
+| Open BIOS/UEFI settings | With the laptop fully shut down, hold **F2**, press the power button, and keep holding F2 until the settings screen appears. |
+| Select a boot device | With the installer USB connected and the laptop fully shut down, hold **Esc**, press the power button, and keep holding Esc until the boot menu appears. Select the USB's UEFI entry. |
+
+Both startup shortcuts have been confirmed on this A14: **F2 opens BIOS/UEFI settings**, and **holding Esc at power-on opens the boot-device menu**. See [ASUS BIOS access](https://www.asus.com/us/support/faq/1008829/) and [ASUS USB boot selection](https://www.asus.com/support/faq/1013017/).
+
+If you miss the key during a reboot, let Windows start, then shut down fully and use the hold-before-power-on method. Do not assume F7, F8 or F12 opens a menu: the expected menus were not available in the initial A14 testing.
+
+**Windows restart method, without timing a keypress:**
+
+Open **Settings → System → Recovery → Advanced startup → Restart now**. After Windows restarts:
+
+* For BIOS/UEFI, choose **Troubleshoot → Advanced options → UEFI Firmware Settings → Restart**.
+* For the installer, choose **Use a device** and select the USB's UEFI entry if listed.
+
+If the USB is absent, connect it directly to the laptop, check that the image was written successfully, and retry. BIOS boot-priority or Boot Override controls can be used if present, but their availability varies; do not assume this A14 has the menus shown in ASUS's generic screenshots.
+
+**5. Disable Secure Boot without clearing security keys**
+
+After completing the Windows preparation, enter BIOS/UEFI and locate **Secure Boot**, often under **Security** or **Boot**. Set its enable/control setting to **Disabled**, then use the displayed **Save Changes and Exit** action. Labels and navigation depend on the firmware version. [ASUS Secure Boot guidance](https://www.asus.com/support/faq/1050047/).
+
+**Leave the TPM enabled. Do not clear the TPM, delete Secure Boot keys, or reset all BIOS settings.** Those actions are not required to boot this installer and can create additional Windows sign-in or recovery problems.
+
+For this project's unsigned installer and installed kernel, leave Secure Boot disabled unless you separately configure a supported signing setup.
+
+**6. If keeping Windows, verify it and resume protection**
+
+After the firmware change, boot Windows once and confirm you can sign in. If you suspended BitLocker, resume protection when the firmware/boot changes are complete:
+
+```powershell
+Resume-BitLocker -MountPoint "C:"
+manage-bde -status C:
+```
+
+Check that protection is on and verify Windows starts with the boot settings you intend to keep. If recovery prompts recur, use the saved key and investigate the boot configuration; do not leave protection suspended as a permanent workaround. If you make more boot changes, suspend again beforehand. [Microsoft's resume instructions](https://learn.microsoft.com/en-us/troubleshoot/windows-client/windows-security/suspend-bitlocker-protection-non-microsoft-updates).
+
+If you fully decrypted instead, this resume command does not re-encrypt the drive. Re-enabling encryption later is a separate Windows setup step.
+
+**7. Boot the USB and return to your installation guide**
+
+Use Esc at power-on or Windows Advanced Startup as described above. Select the USB's UEFI entry, keep the lid open, and initially disconnect external displays and docks.
+
+Check the live system's keyboard, display, SSD and networking before changing any partitions. Booting the USB does not itself erase Windows; the later partitioning and formatting commands do.
+
+Then continue with **step 5** of [Installing NixOS ARM](#installing-nixos-arm) or [Installing Arch Linux ARM](#installing-arch-linux-arm). Do not repeat firmware changes already completed here.
+
+</details>
 
 ## Installation
 
@@ -162,13 +304,9 @@ Write the image directly; copying the ISO file onto an ordinary USB filesystem d
 
 **5. Boot the installer on the A14**
 
-Before changing the SSD:
+Complete [Windows encryption, PIN and boot preparation](#windows-and-boot-preparation) before changing Secure Boot. It covers backing up the recovery key, suspending BitLocker or optionally decrypting, and keeping a way to sign into Windows.
 
-* Back up your personal files and extracted firmware.
-* Save any Windows device-encryption or BitLocker recovery key.
-* Disable Secure Boot for this unsigned custom installer.
-
-Connect the USB and select its UEFI boot entry. From Windows, **Advanced startup → Use a device** may expose the USB option. Firmware menus vary.
+Use **F2 held at power-on** for BIOS/UEFI settings. For the USB boot menu, hold **Esc at power-on** until it appears. Windows **Advanced startup → Use a device** is an alternative, as explained in the preparation section. Select the USB's UEFI entry. If you already completed this preparation through the WSL guide, continue below.
 
 For the first boot, keep the lid open and disconnect external displays and docks.
 
@@ -640,13 +778,9 @@ Write the image directly. Simply copying the `.iso` file onto an ordinary USB fi
 
 **5. Boot the USB on the A14**
 
-Before changing the SSD:
+Complete [Windows encryption, PIN and boot preparation](#windows-and-boot-preparation) before changing Secure Boot. It covers backing up the recovery key, suspending BitLocker or optionally decrypting, and keeping a way to sign into Windows.
 
-* Back up your files and extracted firmware.
-* Save any Windows device-encryption or BitLocker recovery key.
-* Disable Secure Boot for this unsigned custom-kernel installation.
-
-With the USB connected, select its UEFI boot entry. From Windows, **Advanced startup → Use a device** may expose the USB boot option. Firmware menu availability varies.
+Use **F2 held at power-on** for BIOS/UEFI settings. For the USB boot menu, hold **Esc at power-on** until it appears. Windows **Advanced startup → Use a device** is an alternative, as explained in the preparation section. Select the USB's UEFI entry. If you already completed this preparation through the WSL guide, continue below.
 
 Once the live environment starts, become root:
 
@@ -1366,7 +1500,9 @@ If Windows later offers to format a partition on the installer USB, cancel that 
 
 **8. Boot the USB and choose which distribution to install**
 
-Back up your files and Windows recovery key before changing boot settings or partitions. Disable Secure Boot for this unsigned custom installer, then boot the USB's UEFI entry. Windows **Advanced startup → Use a device** may expose it; firmware menus vary.
+Now that the USB is ready, complete [Windows encryption, PIN and boot preparation](#windows-and-boot-preparation). Suspend BitLocker protection or deliberately decrypt as described there before disabling Secure Boot. Keep a working account-recovery method as well: changing encryption does not guarantee that the Windows Hello PIN will remain usable.
+
+Use **F2 held at power-on** for BIOS/UEFI. Hold **Esc at power-on** for USB selection, or use Windows Advanced Startup as an alternative. Both F2 and Esc have been confirmed on this A14; the preparation section gives the full steps.
 
 Keep the lid open and initially disconnect external displays and docks. Check that the live environment can use the keyboard, SSD, and network before modifying the SSD.
 
