@@ -6,90 +6,1134 @@ The project also builds an ARM64 NixOS installer ISO. It currently uses the pinn
 
 ## Before you start
 
-You'll need Nix with flakes enabled and the **Windows firmware files from your UX3407NA**. Already have the extracted files? Keep using them. Otherwise, follow the [firmware guide](docs/firmware.md), which includes collectors for Windows and Linux.
+You'll need an existing Linux device to create the ISO using this guide. Using NixOS is easiest, but any Linux OS with Nix and flakes enabled (guide includes this) will work. You will need the **Windows firmware files from your UX3407NA**. Already have the extracted files? Keep using them. Otherwise, follow the [firmware guide](docs/firmware.md), which includes collectors for Windows and Linux.
 
 Firmware is required by both the installer and the installed system. Keep a backup of the extracted directory; it is not included in this public repository.
 
-## Use with your NixOS flake
+## Installation
 
-Add the hardware module to your system's module list and point it at your firmware directory. For example, with firmware in `/etc/nixos/firmware`:
+<details>
+<summary><strong>Installing NixOS ARM</strong></summary>
 
-```nix
-{
-  inputs = {
-    a14.url = "github:chrispouliot/linux-zenbook-a14-arm";
+This walkthrough installs NixOS on an A14 that does not already have Linux installed.
 
-    # Start with the project's tested Nixpkgs version.
-    nixpkgs.follows = "a14/nixpkgs";
-  };
+You will first build a custom installer on another Linux computer, boot it from USB, and install NixOS onto the A14’s SSD. The installed system includes the project’s patched kernel, device tree, firmware integration, and hardware configuration.
 
-  outputs = { nixpkgs, a14, ... }: {
-    nixosConfigurations.a14 = nixpkgs.lib.nixosSystem {
-      modules = [
-        a14.nixosModules.default
-        ./hardware-configuration.nix
-        ./configuration.nix
+**You will need:**
 
-        {
-          hardware.asus.zenbookA14.firmwareSource = ./firmware;
-        }
-      ];
-    };
-  };
-}
-```
+* An ASUS Zenbook A14 **UX3407NA / Snapdragon X2 Elite**.
+* Another Linux computer, either Intel/AMD x86-64 or ARM64.
+* A spare USB drive large enough for the generated ISO.
+* The required Windows firmware files from your A14.
+* An internet connection during installation.
 
-Keep your own disk, bootloader, user and desktop configuration in the imported files. The module selects ARM64 and the custom kernel automatically, so remove any competing `boot.kernelPackages` assignment. If using systemd-boot, ensure `boot.loader.systemd-boot.installDeviceTree = true;` is enabled.
+This example uses a fresh installation with an unencrypted ext4 filesystem and the GNOME desktop. For dual boot, encryption, or other disk layouts, adapt the partitioning steps before continuing.
 
-For an existing flake, you can keep your current `nixpkgs` input. The hardware module uses its own pinned build dependencies; leave its Nixpkgs input pinned for the initial setup.
+**Installer status:** the ISO configuration has been evaluated, but the complete ISO build and physical USB boot still need validation. See [validation status](docs/validation.md).
 
-**Using Git?** The `./firmware` example requires those files to be tracked in the local flake source. To keep the binaries outside a public configuration repository, use the [private firmware input example](docs/firmware.md#keep-firmware-outside-your-configuration-repository).
+---
 
-Build the configuration for your next boot:
+**1. Prepare the build computer**
+
+If your other computer already has Nix with flakes enabled, skip to step 2.
+
+Nix is a package manager that can run alongside another Linux distribution. Installing it does not replace that computer’s operating system or normal package manager. Here, it provides the tools and dependencies needed to build the A14 installer.
+
+On a typical systemd-based Linux distribution with SELinux disabled, run:
 
 ```bash
-sudo nixos-rebuild boot --flake /etc/nixos#a14
+curl --proto '=https' --tlsv1.2 -L \
+  https://nixos.org/nix/install \
+  -o /tmp/install-nix
+
+sh /tmp/install-nix --daemon
 ```
 
-After it succeeds, reboot to load the selected kernel. Keep a previous working boot generation available while testing. See the [example configuration](examples/installed/) and [module options](docs/hardware.md) for desktop setup and optional hardware settings.
+Run this from your normal user account. The installer requests administrator access when needed. See the [official Nix installation instructions](https://nixos.org/download/) for other host configurations.
 
-## Build an installer ISO
+Close your terminal, open a new one, and check:
 
-On a Linux machine with Nix and flakes enabled:
+```bash
+nix --version
+```
+
+Enable flakes:
+
+```bash
+mkdir -p ~/.config/nix
+nano ~/.config/nix/nix.conf
+```
+
+Add:
+
+```ini
+experimental-features = nix-command flakes
+```
+
+If this setting already exists, add the features to its existing line.
+
+In Nano, save with **Ctrl+O**, press **Enter**, then exit with **Ctrl+X**.
+
+---
+
+**2. Download the project and prepare the firmware**
+
+Install Git through your normal package manager if necessary, then run:
 
 ```bash
 git clone https://github.com/chrispouliot/linux-zenbook-a14-arm.git
 cd linux-zenbook-a14-arm
-
-# Set this to your extracted firmware directory.
-a14_firmware_dir="$HOME/a14-firmware"
-
-nix run .#firmware -- validate "$a14_firmware_dir" --strict
-
-nix build .#iso \
-  --override-input windows-firmware "path:$a14_firmware_dir" \
-  --no-write-lock-file -L
 ```
 
-The ISO appears in **`result/iso/`**. On an ARM64 Linux machine it builds natively; on an x86_64 Linux machine it cross-compiles an ARM64 installer. Cross builds can take considerably longer. Strict firmware validation checks the known reference files; the [firmware guide](docs/firmware.md) explains how to handle another firmware version.
+Follow [the firmware guide](docs/firmware.md) to collect the required files from the A14’s Windows installation or matching driver packages.
 
-To install:
+Copy the extracted directory onto the build computer. These examples assume it is located at:
 
-1. Write the ISO to a spare USB drive using a disk-image writer.
-2. Boot its UEFI entry on the A14 with Secure Boot disabled.
-3. Follow the [installation guide](docs/installation.md) to prepare your Linux partitions, copy the module and firmware to the target configuration, and run `nixos-install`.
+```text
+~/a14-firmware/
+```
 
-The installer includes the supplied firmware at `/etc/a14-firmware`. The guide shows how to copy it into the installed configuration so it remains available after removing the USB drive. The ISO contains your Windows firmware; keep it private unless you have permission to redistribute those files.
+Already have the files? Reuse them.
 
-You can also expose an ISO from your own flake:
+Validate the directory:
+
+```bash
+nix run .#firmware -- validate "$HOME/a14-firmware" --strict
+```
+
+Resolve any missing files or reference-hash differences before continuing. The firmware guide explains how to handle another firmware version.
+
+**Keep a separate backup of this directory before removing Windows.** The firmware is required by both the installer and the installed system.
+
+---
+
+**3. Build the A14 installer ISO**
+
+From the project directory:
+
+```bash
+nix build .#iso \
+  --override-input windows-firmware "path:$HOME/a14-firmware" \
+  --no-write-lock-file \
+  --out-link result-a14-iso \
+  -L
+```
+
+Use the same command on an x86-64 or ARM64 Linux computer.
+
+On ARM64, the build runs natively. On x86-64, the project cross-compiles an ARM64 installer. **Both produce an ISO for the A14.**
+
+Keep the project’s pinned inputs unchanged for your first installation.
+
+The first build can take considerable time and disk space, especially when cross-compiling. It may build parts of the live system as well as the kernel.
+
+When it finishes, find the ISO with:
+
+```bash
+ls -lh result-a14-iso/iso/
+```
+
+The `.iso` file in that directory is your installer.
+
+It contains your supplied Windows firmware. Keep the ISO private unless you have permission to redistribute those files.
+
+---
+
+**4. Write the ISO to USB**
+
+Use your distribution’s disk-image writer to write the generated ISO to a spare USB drive.
+
+For example, in GNOME Disks:
+
+1. Select the USB drive.
+2. Open its menu and choose **Restore Disk Image**.
+3. Select the generated `.iso` file.
+4. Check the selected drive’s model and capacity, then start writing.
+
+**Writing the image erases the USB drive.**
+
+Write the image directly; copying the ISO file onto an ordinary USB filesystem does not make it bootable.
+
+---
+
+**5. Boot the installer on the A14**
+
+Before changing the SSD:
+
+* Back up your personal files and extracted firmware.
+* Save any Windows device-encryption or BitLocker recovery key.
+* Disable Secure Boot for this unsigned custom installer.
+
+Connect the USB and select its UEFI boot entry. From Windows, **Advanced startup → Use a device** may expose the USB option. Firmware menus vary.
+
+For the first boot, keep the lid open and disconnect external displays and docks.
+
+The installer starts in a terminal. Become root:
+
+```bash
+sudo -i
+```
+
+The remaining installation commands run from this root shell, so they do not need `sudo`.
+
+Check the kernel and device tree:
+
+```bash
+uname -m
+uname -r
+tr '\0' '\n' < /sys/firmware/devicetree/base/compatible
+```
+
+Expect `aarch64`, with device-tree entries including:
+
+```text
+asus,zenbook-a14-ux3407na
+qcom,glymur
+```
+
+Connect to Wi-Fi:
+
+```bash
+nmtui
+```
+
+Choose **Activate a connection**, select your network, and enter its password. A supported Ethernet adapter is another option.
+
+Check connectivity:
+
+```bash
+curl -I https://nixos.org
+```
+
+Verify that the keyboard, display, networking, and SSD are accessible before changing partitions.
+
+---
+
+**6. Prepare the SSD**
+
+List the disks:
+
+```bash
+lsblk -o NAME,SIZE,MODEL,FSTYPE,MOUNTPOINTS
+```
+
+Identify the internal SSD by its model and capacity. Do not confuse it with the USB installer.
+
+For a fresh installation, use a GPT partition table with:
+
+| Partition            | Suggested size  | Partition type   | Filesystem | Mount point |
+| -------------------- | --------------- | ---------------- | ---------- | ----------- |
+| EFI system partition | 2 GiB           | EFI System       | FAT32      | `/boot`     |
+| NixOS root partition | Remaining space | Linux filesystem | ext4       | `/`         |
+
+Open the partition editor using the actual SSD device:
+
+```bash
+cfdisk /dev/REPLACE_WITH_SSD
+```
+
+An NVMe SSD might be `/dev/nvme0n1`.
+
+**Deleting existing partitions and writing a new layout destroys the existing installation. These fresh-install instructions do not preserve Windows.**
+
+In `cfdisk`, create the two partitions, set their types, review the layout, then choose **Write** and **Quit**.
+
+If you want to keep Windows, shrink its partition from Windows first and follow [the dual-boot preparation notes](docs/installation.md). Keep the existing EFI and recovery partitions; do not run the EFI formatting command below on an existing Windows EFI partition.
+
+Run `lsblk` again, then enter the actual partition paths:
+
+```bash
+read -r -p 'New EFI partition to format: ' a14_esp
+read -r -p 'New NixOS root partition to format: ' a14_root
+```
+
+Review your selections:
+
+```bash
+lsblk -o NAME,SIZE,FSTYPE,MOUNTPOINTS "$a14_esp" "$a14_root"
+```
+
+**The next two commands erase those partitions.** Run them only after confirming the selections:
+
+```bash
+mkfs.fat -F 32 "$a14_esp"
+mkfs.ext4 -L nixos "$a14_root"
+```
+
+Mount the new installation:
+
+```bash
+mount "$a14_root" /mnt
+mkdir -p /mnt/boot
+mount "$a14_esp" /mnt/boot
+```
+
+`/mnt` now represents the future installed system. Its `/boot` directory is the EFI partition.
+
+---
+
+**7. Generate the disk configuration**
+
+Run:
+
+```bash
+nixos-generate-config --root /mnt
+```
+
+This creates configuration files under `/mnt/etc/nixos`, including `hardware-configuration.nix`, which records the filesystems you just mounted.
+
+Check it:
+
+```bash
+cat /mnt/etc/nixos/hardware-configuration.nix
+```
+
+It should contain entries for `/` and `/boot`.
+
+Keep this generated file. It describes your actual disk layout and should not be replaced with someone else’s hardware configuration. See the [NixOS installation manual](https://nixos.org/manual/nixos/stable/#sec-installation-manual) for the general installation process.
+
+---
+
+**8. Add the A14 support and your settings**
+
+The installer includes a copy of this project and the firmware you supplied.
+
+Copy them into the new system:
+
+```bash
+mkdir -p /mnt/etc/nixos/hardware
+
+cp -aL /etc/nixos-a14-source \
+  /mnt/etc/nixos/hardware/nixos-a14
+
+chmod -R u+w /mnt/etc/nixos/hardware/nixos-a14
+
+a14-firmware copy /etc/a14-firmware \
+  /mnt/etc/nixos/firmware
+```
+
+Copy the supplied starter configuration:
+
+```bash
+cp /etc/nixos-a14-source/examples/installed/flake.nix \
+  /mnt/etc/nixos/flake.nix
+
+cp /etc/nixos-a14-source/examples/installed/configuration.nix \
+  /mnt/etc/nixos/configuration.nix
+```
+
+These commands replace the generated starter `configuration.nix` while keeping your generated `hardware-configuration.nix`.
+
+The files now have these roles:
+
+| File or directory            | Purpose                                                                         |
+| ---------------------------- | ------------------------------------------------------------------------------- |
+| `flake.nix`                  | Connects your configuration to the A14 hardware module and pinned dependencies. |
+| `configuration.nix`          | Your username, desktop, hostname, and other preferences.                        |
+| `hardware-configuration.nix` | Your detected filesystems and disk identifiers.                                 |
+| `hardware/nixos-a14/`        | The hardware project copied from this installer.                                |
+| `firmware/`                  | Your extracted Windows firmware.                                                |
+
+Edit your personal settings:
+
+```bash
+nano /mnt/etc/nixos/configuration.nix
+```
+
+Find:
 
 ```nix
-packages.aarch64-linux.iso = a14.lib.mkIso {
-  firmwareSource = ./firmware;
-};
+users.users.owner = {
 ```
 
-For an x86_64 Linux builder, use `packages.x86_64-linux.iso` and add `buildSystem = "x86_64-linux";` inside the same call.
+Change `owner` to the username you want. For example:
+
+```nix
+users.users.alex = {
+```
+
+The example already enables:
+
+* GNOME and its graphical login screen.
+* NetworkManager.
+* An administrator account through the `wheel` group.
+* systemd-boot with device-tree installation.
+* Nix flakes.
+
+You can also add your timezone inside the main configuration:
+
+```nix
+time.timeZone = "America/Vancouver";
+```
+
+Leave `system.stateVersion` at the example’s initial installation value when performing future upgrades.
+
+The flake supplies firmware using:
+
+```nix
+hardware.asus.zenbookA14.firmwareSource = ./firmware;
+```
+
+After installation, that directory will be `/etc/nixos/firmware`. NixOS handles installing the kernel, device tree, modules, and firmware into the system.
+
+---
+
+**9. Install NixOS and set your passwords**
+
+Run:
+
+```bash
+nixos-install --flake /mnt/etc/nixos#a14
+```
+
+This builds the configured system, installs it onto the SSD, and sets up its bootloader.
+
+Keep the laptop connected to power and the internet. Nix reuses matching available builds, but installation can still compile packages or the kernel—particularly when the USB image was cross-compiled on x86-64.
+
+Set the root password when prompted.
+
+Then set the password for the normal user you configured. For the example username `alex`:
+
+```bash
+nixos-enter --root /mnt -c 'passwd alex'
+```
+
+Replace `alex` if you chose another username.
+
+Wait for installation to finish successfully before rebooting. If it fails, retain the error output and resolve it from the live environment.
+
+---
+
+**10. Reboot into your installed system**
+
+Finish disk writes and unmount the SSD:
+
+```bash
+sync
+umount -R /mnt
+reboot
+```
+
+Remove the USB as the laptop restarts. Select the internal Linux boot option if necessary.
+
+The example leaves EFI-variable writes disabled because of the firmware limitation observed on this hardware. It installs the bootloader files, including the ARM64 fallback path, but firmware boot selection may still need attention.
+
+Log in through GNOME using your new account and password.
+
+Check:
+
+```bash
+uname -r
+nixos-version
+```
+
+Test the internal display, keyboard, touchpad, Wi-Fi, Bluetooth, audio, and battery information. Then test suspend/resume and your external displays or dock.
+
+The installed system has its own kernel and firmware. It does not need the installer USB or Windows partition to run.
+
+**Keep `/etc/nixos/firmware` and your separate firmware backup.** Future rebuilds still need the firmware source.
+
+---
+
+**Making changes afterward**
+
+Your personal settings live in:
+
+```text
+/etc/nixos/configuration.nix
+```
+
+After editing them, apply the configuration with:
+
+```bash
+sudo nixos-rebuild switch --flake /etc/nixos#a14
+```
+
+For kernel or hardware changes, prepare the next boot instead:
+
+```bash
+sudo nixos-rebuild boot --flake /etc/nixos#a14
+sudo reboot
+```
+
+A reboot is required to start a different kernel. Keep a previous working generation available in the boot menu when testing changes.
+
+The starter flake uses the local hardware-project copy from your installer. It will not automatically fetch later GitHub changes.
+
+When you are ready to follow the public repository, change the `a14` input in `/etc/nixos/flake.nix` to:
+
+```nix
+a14.url = "github:chrispouliot/linux-zenbook-a14-arm";
+```
+
+Then update that input and prepare a new generation:
+
+```bash
+cd /etc/nixos
+sudo nix flake update a14
+sudo nixos-rebuild boot --flake .#a14
+```
+
+Review the project’s changes before rebooting into the new generation. Your firmware setting and personal configuration stay in place.
+
+**Using Git for your configuration?** The initial directory is not Git-backed. Before adding it to a public repository, follow [the private firmware input instructions](docs/firmware.md#keep-firmware-outside-your-configuration-repository). Keep the Windows binaries out of public commits.
+
+</details>
+
+
+<details>
+<summary><strong>Installing Arch Linux ARM</strong></summary>
+
+This walkthrough starts with:
+
+* An ASUS Zenbook A14 **UX3407NA / Snapdragon X2 Elite**.
+* Another computer running Linux, either Intel/AMD x86-64 or ARM64.
+* A USB drive large enough for the generated ISO.
+* The required firmware extracted from the A14’s Windows installation.
+* An internet connection during installation.
+
+You do not need Linux already installed on the A14.
+
+**Status: experimental.** The project’s ISO configuration supports native ARM64 and x86-64-to-ARM64 builds, but this complete Arch installation procedure still needs hardware testing.
+
+This example covers a fresh installation using an EFI partition and an unencrypted ext4 root partition. Preserving Windows, disk encryption, and more complex partition layouts require different partitioning instructions.
+
+**How this works**
+
+Your other Linux computer builds an ARM64 live ISO containing the patched Glymur kernel, A14 device tree, drivers, and firmware.
+
+You boot that ISO on the A14, install an Arch Linux ARM base system onto its SSD, and copy the matching hardware files from the live environment into the installed system.
+
+The live environment uses NixOS. The installed system uses Arch Linux ARM and `pacman`.
+
+Nix is only required on the build computer. Installing Nix there adds a package manager and build service alongside your existing distribution; it does not replace your operating system.
+
+---
+
+**1. On the build computer: install Nix**
+
+If Nix is already installed with flakes enabled, skip this step.
+
+On a typical systemd-based Linux distribution with SELinux disabled, run the official installer from your normal account:
+
+```bash
+curl --proto '=https' --tlsv1.2 -L \
+  https://nixos.org/nix/install \
+  -o /tmp/install-nix
+
+sh /tmp/install-nix --daemon
+```
+
+It will request administrator access where needed. See the [official Nix instructions](https://nixos.org/download/) for other host configurations.
+
+Close your terminal, open a new one, and check:
+
+```bash
+nix --version
+```
+
+Enable flakes:
+
+```bash
+mkdir -p ~/.config/nix
+nano ~/.config/nix/nix.conf
+```
+
+Add:
+
+```ini
+experimental-features = nix-command flakes
+```
+
+If the setting already exists, add these features to its existing line.
+
+In Nano, save with **Ctrl+O**, press **Enter**, then exit with **Ctrl+X**.
+
+---
+
+**2. Download the project and prepare the firmware**
+
+Install Git through your normal package manager if necessary, then run:
+
+```bash
+git clone https://github.com/chrispouliot/linux-zenbook-a14-arm.git
+cd linux-zenbook-a14-arm
+```
+
+Follow [the firmware collection instructions](docs/firmware.md) to collect the files from the matching A14 Windows installation.
+
+Place them in:
+
+```text
+~/a14-firmware/
+```
+
+If you already have the extracted files, reuse that directory.
+
+Validate them:
+
+```bash
+nix run .#firmware -- validate "$HOME/a14-firmware" --strict
+```
+
+Resolve any missing files or reference-hash differences before continuing.
+
+Keep a separate backup of these files before removing Windows. The firmware is needed by the installed system during normal operation.
+
+---
+
+**3. Build the bootable A14 ISO**
+
+From the project directory:
+
+```bash
+nix build .#iso \
+  --override-input windows-firmware "path:$HOME/a14-firmware" \
+  --no-write-lock-file \
+  --out-link result-a14-iso \
+  -L
+```
+
+Use this same command on an x86-64 or ARM64 Linux build computer.
+
+The project selects a native ARM64 build on ARM64 hosts and cross-compilation on x86-64 hosts. **The resulting ISO targets the A14 in both cases.** Do not add `--system aarch64-linux` to force the build on an x86-64 computer.
+
+The first build can be substantial: it may compile parts of the live system as well as the kernel. Allow plenty of free disk space and keep the computer connected to power.
+
+A successful build places the ISO under:
+
+```text
+result-a14-iso/iso/
+```
+
+List the exact filename:
+
+```bash
+ls -lh result-a14-iso/iso/
+```
+
+If the build fails, retain the error output. A successfully evaluated configuration is not a guarantee that every cross-compilation dependency will build.
+
+This ISO contains your supplied Windows firmware. Keep it private unless you have permission to redistribute those files.
+
+---
+
+**4. Write the ISO to USB**
+
+Use your distribution’s disk-image writer and select the generated `.iso` file.
+
+For example, GNOME Disks provides **Restore Disk Image** after selecting the USB drive.
+
+**Writing an image erases the selected USB drive.** Check its model and capacity before starting.
+
+Write the image directly. Simply copying the `.iso` file onto an ordinary USB filesystem does not make the drive bootable.
+
+---
+
+**5. Boot the USB on the A14**
+
+Before changing the SSD:
+
+* Back up your files and extracted firmware.
+* Save any Windows device-encryption or BitLocker recovery key.
+* Disable Secure Boot for this unsigned custom-kernel installation.
+
+With the USB connected, select its UEFI boot entry. From Windows, **Advanced startup → Use a device** may expose the USB boot option. Firmware menu availability varies.
+
+Once the live environment starts, become root:
+
+```bash
+sudo -i
+```
+
+Check that it is running on ARM64:
+
+```bash
+uname -m
+uname -r
+```
+
+The architecture should be `aarch64`.
+
+Connect to the internet:
+
+```bash
+nmtui
+```
+
+Choose **Activate a connection**, select your network, and enter its password. Wired networking is another option.
+
+Check connectivity:
+
+```bash
+curl -I https://archlinuxarm.org
+```
+
+**Check the keyboard, storage visibility, and networking before repartitioning.** If the live environment cannot reliably access the SSD or network, resolve that first.
+
+---
+
+**6. Load the installation tools**
+
+Still in the A14 live environment:
+
+```bash
+nix shell \
+  --inputs-from /etc/nixos-a14-source \
+  nixpkgs#libarchive \
+  nixpkgs#arch-install-scripts \
+  nixpkgs#dosfstools \
+  nixpkgs#e2fsprogs \
+  --command bash
+```
+
+This opens a shell containing tools for extracting Arch, creating filesystems, and configuring the installed system.
+
+Keep using this shell for the following steps.
+
+The commands now execute on the ARM64 A14. No x86-to-ARM emulation is needed during installation.
+
+---
+
+**7. Prepare the SSD**
+
+List the disks:
+
+```bash
+lsblk -o NAME,SIZE,MODEL,FSTYPE,MOUNTPOINTS
+```
+
+Identify the A14’s internal SSD by its model and capacity. Do not confuse it with the installer USB.
+
+For a fresh installation, use a GPT partition table with:
+
+| Partition            | Suggested size  | Partition type   | Filesystem | Mount point |
+| -------------------- | --------------- | ---------------- | ---------- | ----------- |
+| EFI system partition | 2 GiB           | EFI System       | FAT32      | `/boot`     |
+| Linux root partition | Remaining space | Linux filesystem | ext4       | `/`         |
+
+Open the partition editor using the actual SSD device:
+
+```bash
+cfdisk /dev/REPLACE_WITH_SSD
+```
+
+For example, an NVMe SSD might be `/dev/nvme0n1`.
+
+**Deleting existing partitions and writing a new layout destroys the existing installation. This fresh-install example does not preserve Windows.**
+
+In `cfdisk`, create the two partitions, set their types, review the layout, then choose **Write** and **Quit**.
+
+Run `lsblk` again and identify the resulting partition names.
+
+Set these variables using your actual new partitions:
+
+```bash
+a14_esp=/dev/REPLACE_WITH_EFI_PARTITION
+a14_root=/dev/REPLACE_WITH_ROOT_PARTITION
+```
+
+For example, they might be `/dev/nvme0n1p1` and `/dev/nvme0n1p2`.
+
+Format and mount them:
+
+```bash
+mkfs.fat -F 32 "$a14_esp"
+mkfs.ext4 "$a14_root"
+
+mount "$a14_root" /mnt
+mkdir -p /mnt/boot
+mount "$a14_esp" /mnt/boot
+```
+
+These formatting commands erase the selected partitions.
+
+---
+
+**8. Install the Arch Linux ARM base system**
+
+Arch Linux ARM supplies a generic AArch64 root-filesystem archive. We use its userspace and supply our own A14 kernel and boot configuration. [Arch Linux ARM generic installation](https://archlinuxarm.org/platforms/armv8/generic).
+
+Download the archive onto the mounted SSD:
+
+```bash
+curl --fail --location \
+  --proto '=https' --proto-redir '=https' \
+  https://ca.us.mirror.archlinuxarm.org/os/ArchLinuxARM-aarch64-latest.tar.gz \
+  -o /mnt/ArchLinuxARM-aarch64-latest.tar.gz
+```
+
+Extract it as root using `bsdtar`:
+
+```bash
+bsdtar -xpf /mnt/ArchLinuxARM-aarch64-latest.tar.gz -C /mnt
+```
+
+If extraction reports errors, stop and resolve them.
+
+Generate the filesystem mount configuration:
+
+```bash
+genfstab -U /mnt > /mnt/etc/fstab
+cat /mnt/etc/fstab
+```
+
+Check that it contains the intended root filesystem and `/boot` partition.
+
+---
+
+**9. Copy the A14 kernel and hardware files**
+
+We will reuse the files from the live system that just booted this laptop.
+
+Record its kernel release:
+
+```bash
+a14_release=$(uname -r)
+printf '%s\n' "$a14_release" > /mnt/etc/a14-kernel-release
+```
+
+Copy the kernel and already-overlaid device tree:
+
+```bash
+mkdir -p /mnt/boot/a14
+
+cp -L /run/booted-system/kernel \
+  /mnt/boot/a14/Image
+
+cp -L \
+  /run/booted-system/dtbs/qcom/glymur-asus-zenbook-a14-ux3407na.dtb \
+  /mnt/boot/a14/a14.dtb
+```
+
+Copy the matching modules:
+
+```bash
+mkdir -p /mnt/usr/lib/modules
+
+cp -rL \
+  "/run/booted-system/kernel-modules/lib/modules/$a14_release" \
+  /mnt/usr/lib/modules/
+```
+
+Copy the assembled firmware into a directory specific to this kernel release:
+
+```bash
+mkdir -p "/mnt/usr/lib/firmware/updates/$a14_release"
+
+cp -rL /run/booted-system/firmware/. \
+  "/mnt/usr/lib/firmware/updates/$a14_release/"
+```
+
+This includes both the supplied Windows firmware and firmware assembled by the project. It may take a while.
+
+The `-L` options copy the actual contents behind Nix store links. The installed Arch system must have ordinary files available after the USB is removed.
+
+Also retain the original Windows firmware source:
+
+```bash
+mkdir -p /mnt/root/a14-firmware-source
+
+cp -rL /etc/a14-firmware/. \
+  /mnt/root/a14-firmware-source/
+```
+
+---
+
+**10. Enter the installed Arch system**
+
+A *chroot* lets you run commands using the installed Arch filesystem while the live kernel continues running.
+
+```bash
+arch-chroot /mnt /usr/bin/env -i \
+  HOME=/root \
+  TERM="$TERM" \
+  PATH=/usr/local/sbin:/usr/local/bin:/usr/bin \
+  /bin/bash
+```
+
+`arch-chroot` provides access to devices and other essential runtime filesystems. [Arch chroot documentation](https://man.archlinux.org/man/arch-chroot.8.en).
+
+**Until the explicit `exit` below, commands configure the Arch installation.**
+
+Initialize the Arch Linux ARM package keys:
+
+```bash
+pacman-key --init
+pacman-key --populate archlinuxarm
+```
+
+Update the system and install essential tools:
+
+```bash
+pacman -Syu mkinitcpio networkmanager sudo nano
+```
+
+Read the prompts and resolve any package or signature errors. Do not disable signature checking to bypass them.
+
+Set the root password and replace the archive’s default `alarm` password:
+
+```bash
+passwd
+passwd alarm
+```
+
+The `alarm` account is your initial normal user account. Add it to the administrator group:
+
+```bash
+usermod -aG wheel alarm
+EDITOR=nano visudo
+```
+
+Uncomment the rule allowing members of `wheel` to run commands through `sudo`.
+
+Set a hostname:
+
+```bash
+printf 'a14\n' > /etc/hostname
+```
+
+Choose your timezone; this example uses Vancouver:
+
+```bash
+ln -sf /usr/share/zoneinfo/America/Vancouver /etc/localtime
+```
+
+Edit the locale list:
+
+```bash
+nano /etc/locale.gen
+```
+
+Uncomment your preferred UTF-8 locale, such as `en_US.UTF-8 UTF-8`, then run:
+
+```bash
+locale-gen
+printf 'LANG=en_US.UTF-8\n' > /etc/locale.conf
+```
+
+Use the same locale in both places.
+
+Configure networking:
+
+```bash
+systemctl disable systemd-networkd
+systemctl disable sshd
+systemctl enable NetworkManager systemd-resolved systemd-timesyncd
+```
+
+We will finish the DNS symlink after leaving the chroot.
+
+---
+
+**11. Create Arch’s early boot image**
+
+The *initramfs* loads essential drivers and mounts the SSD before starting the installed system.
+
+Create an A14-specific configuration:
+
+```bash
+cat > /etc/mkinitcpio-a14.conf <<'EOF'
+MODULES=(
+  tcsrcc-glymur
+  phy_qcom_qmp_pcie
+  phy_qcom_m31_eusb2
+  phy_qcom_eusb2_repeater
+  phy_qcom_qmp_usb
+  phy_qcom_qmp_usbc
+  gpi
+  i2c_qcom_geni
+  i2c_hid_of
+  nvme
+  usb_storage
+  uas
+)
+BINARIES=()
+FILES=()
+HOOKS=(base udev modconf block keyboard filesystems fsck)
+COMPRESSION="gzip"
+EOF
+```
+
+This configuration is for the simple unencrypted installation described above. Graphics and audio drivers can load after the real root filesystem—and its firmware—is available.
+
+Load the release name and index its drivers:
+
+```bash
+a14_release=$(cat /etc/a14-kernel-release)
+depmod -a "$a14_release"
+```
+
+Create a preset so the image can be regenerated later:
+
+```bash
+mkdir -p /etc/mkinitcpio.d
+
+cat > /etc/mkinitcpio.d/a14.preset <<EOF
+ALL_config="/etc/mkinitcpio-a14.conf"
+ALL_kver="$a14_release"
+PRESETS=('default')
+default_image="/boot/a14/initramfs.img"
+EOF
+```
+
+Build it:
+
+```bash
+mkinitcpio -p a14
+```
+
+On ARM64, pass the kernel release through the preset, rather than asking `mkinitcpio` to identify it from an x86-style kernel image. [mkinitcpio documentation](https://man.archlinux.org/man/mkinitcpio.8.en).
+
+Stop if this reports errors involving required modules or image generation.
+
+Enable the embedded-controller driver:
+
+```bash
+mkdir -p /etc/modules-load.d
+printf 'asus-glymur-ec\n' > /etc/modules-load.d/a14.conf
+```
+
+Leave the chroot:
+
+```bash
+exit
+```
+
+You are now back in the live environment.
+
+Finish the installed system’s DNS configuration:
+
+```bash
+ln -sfn /run/systemd/resolve/stub-resolv.conf /mnt/etc/resolv.conf
+```
+
+---
+
+**12. Install the bootloader**
+
+Install systemd-boot from the live environment onto the new EFI partition:
+
+```bash
+bootctl --esp-path=/mnt/boot --variables=no install
+```
+
+This installs the ARM64 EFI loader, including the fallback loader path, without attempting to modify the firmware’s boot variables. [bootctl documentation](https://man.archlinux.org/man/bootctl.1.en).
+
+Get the root filesystem’s UUID:
+
+```bash
+a14_root_uuid=$(blkid -s UUID -o value "$a14_root")
+printf 'Root UUID: %s\n' "$a14_root_uuid"
+```
+
+It must print a nonempty UUID.
+
+Create the boot entry:
+
+```bash
+mkdir -p /mnt/boot/loader/entries
+
+cat > /mnt/boot/loader/entries/arch-a14.conf <<EOF
+title Arch Linux ARM - A14 Glymur
+linux /a14/Image
+initrd /a14/initramfs.img
+devicetree /a14/a14.dtb
+options root=UUID=$a14_root_uuid rw rootwait console=tty1 consoleblank=0 pm_async=off mem_sleep_default=s2idle usbcore.quirks=2109:0817:k
+EOF
+```
+
+Create the menu configuration:
+
+```bash
+cat > /mnt/boot/loader/loader.conf <<'EOF'
+default arch-a14.conf
+timeout 5
+editor yes
+EOF
+```
+
+The boot entry explicitly loads the kernel, Arch initramfs, and A14 device tree. These paths are relative to the EFI partition. [Boot Loader Specification](https://uapi-group.org/specifications/specs/boot_loader_specification/).
+
+Check that the files exist:
+
+```bash
+ls -lh /mnt/boot/a14/
+ls -l /mnt/boot/EFI/BOOT/BOOTAA64.EFI
+cat /mnt/boot/loader/entries/arch-a14.conf
+```
+
+---
+
+**13. Boot Arch for the first time**
+
+Finish disk writes and unmount the installation:
+
+```bash
+sync
+umount -R /mnt
+reboot
+```
+
+Remove the USB as the laptop restarts.
+
+Select the internal Linux boot option if necessary. This installation provides the standard ARM64 fallback loader at `EFI/BOOT/BOOTAA64.EFI`; whether firmware automatically selects it must be checked on the laptop.
+
+Log in as `alarm` using the password you set.
+
+Verify:
+
+```bash
+cat /etc/os-release
+uname -r
+```
+
+You should now be running **Arch Linux ARM with the project’s Glymur kernel**.
+
+Reconnect to Wi-Fi using:
+
+```bash
+sudo nmtui
+```
+
+Keep the installer USB. If the installed system fails to boot, it provides the same hardware-enabled environment for mounting the SSD and correcting the installation.
+
+---
+
+**14. Add a desktop**
+
+After confirming the console installation boots and networking works, you can install a desktop from the Arch Linux ARM repositories.
+
+For GNOME:
+
+```bash
+sudo pacman -Syu gnome gdm
+sudo systemctl enable gdm
+sudo reboot
+```
+
+Review the package-selection prompts. Desktop availability and graphics support depend on the ARM repositories’ current packages.
+
+**Audio and other hardware integration**
+
+This procedure transfers the kernel, device tree, firmware, and essential boot configuration.
+
+The NixOS project also contains ALSA, PipeWire/WirePlumber, and device-rule configuration. Those NixOS modules do not automatically configure Arch. In particular, speakers and HDMI audio may require additional integration even when the kernel and firmware are present.
+
+See [the hardware module](modules/default.nix) and [audio module](modules/audio.nix) for the configuration that needs to be ported and tested.
+
+**Updating later**
+
+Use `pacman` to update Arch’s applications and system packages.
+
+The copied Glymur kernel is managed separately. An ordinary Arch update does not update this custom kernel, and the generic Arch kernel should not be assumed to support the A14.
+
+For now, retain the working kernel and installer USB while preparing updates. A future Arch package for the kernel, device tree, and supporting configuration would make this easier to maintain.
+
+Nix does not need to be installed on the A14 for this system to run. It can remain on your other Linux computer for future kernel and ISO builds.
+
+</details>
+
 
 ## Included patches
 
@@ -134,4 +1178,9 @@ These are the project's additions to the pinned Glymur kernel, including device-
 
 </details>
 
-See [hardware notes and options](docs/hardware.md), [validation status](docs/validation.md), and [source provenance](docs/provenance.md) for details. The ISO build and physical boot still need validation; successful configuration evaluation alone does not establish installer compatibility.
+See [hardware notes and options](docs/hardware.md) and [validation status](docs/validation.md) for details. The ISO build and physical boot still need validation; successful configuration evaluation alone does not establish installer compatibility.
+
+### Note
+
+This guide is not responsible for any data loss or misuse. Please read and double check all commands you're running.
+This is experimental.
