@@ -4,6 +4,8 @@ Linux/NixOS hardware support for the **ASUS Zenbook A14 UX3407NA with Snapdragon
 
 The project builds an ARM64 NixOS installer ISO, which can be used to install either NixOS or Arch on your A14. It currently uses the pinned **7.2.0-rc5-next-20260731** Glymur kernel. Support is still evolving; see the [hardware notes](docs/hardware.md) for current limitations, including external display link limits. Earlier Snapdragon X1 A14 models are outside this project's scope.
 
+This project is not responsible for the initial device tree mainlining or A14 support. This project builds on the existing work of others and exists as a guide with small patches to help others get Linux on their A14.
+
 ## Current hardware status
 
 Status reflects the currently used **NixOS configuration on the UX3407NA with the project's patched Glymur kernel and required firmware**. It does not mean the new installer ISO or every peripheral has been validated. Arch users also need the equivalent userspace configuration, particularly for audio.
