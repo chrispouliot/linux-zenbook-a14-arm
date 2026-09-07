@@ -1,19 +1,23 @@
 # Linux on the ASUS Zenbook A14 X2E
 
-Linux/NixOS hardware support for the **ASUS Zenbook A14 UX3407NA with Snapdragon X2 Elite**. Import one module to use the patched kernel, device tree, firmware integration, and audio, USB and suspend workarounds. Your applications, desktop and power governor settings stay in your own configuration.
+Linux/NixOS hardware support for the **ASUS Zenbook A14 UX3407NA with Snapdragon X2 Elite**. This project includes a patched kernel, device tree, firmware integration, and audio, USB and suspend workarounds.
 
-The project also builds an ARM64 NixOS installer ISO. It currently uses the pinned **7.2.0-rc5-next-20260731** Glymur kernel. Support is still evolving; see the [hardware notes](docs/hardware.md) for current limitations, including external display link limits. Earlier Snapdragon X1 A14 models are outside this project's scope.
+The project builds an ARM64 NixOS installer ISO, which can be used to install either NixOS or Arch on your A14. It currently uses the pinned **7.2.0-rc5-next-20260731** Glymur kernel. Support is still evolving; see the [hardware notes](docs/hardware.md) for current limitations, including external display link limits. Earlier Snapdragon X1 A14 models are outside this project's scope.
 
 ## Before you start
 
-You'll need an existing Linux device to create the ISO using this guide. Using NixOS is easiest, but any Linux OS with Nix and flakes enabled (guide includes this) will work. You will need the **Windows firmware files from your UX3407NA**. Already have the extracted files? Keep using them. Otherwise, follow the [firmware guide](docs/firmware.md), which includes collectors for Windows and Linux.
+You can create the ISO on **another Linux computer**, or **on the A14 itself while it is running Windows by using WSL2**. Both routes use Nix with flakes enabled; the guides include the setup steps. If the A14 is your only computer, start with the Windows installation steps. You will need the **Windows firmware files from your UX3407NA**. Follow the [firmware guide](docs/firmware.md), which includes collectors for Windows and Linux.
 
 Firmware is required by both the installer and the installed system. Keep a backup of the extracted directory; it is not included in this public repository.
 
 ## Installation
 
+<a id="installing-nixos-arm"></a>
+
 <details>
 <summary><strong>Installing NixOS ARM</strong></summary>
+
+**Starting from Windows on the A14?** Complete [the WSL2 preparation guide](#installing-from-windows-wsl2) first, then return here at step 5.
 
 This walkthrough installs NixOS on an A14 that does not already have Linux installed.
 
@@ -481,8 +485,12 @@ Review the project’s changes before rebooting into the new generation. Your fi
 </details>
 
 
+<a id="installing-arch-linux-arm"></a>
+
 <details>
 <summary><strong>Installing Arch Linux ARM</strong></summary>
+
+**Starting from Windows on the A14?** Complete [the WSL2 preparation guide](#installing-from-windows-wsl2) first, then return here at step 5.
 
 This walkthrough starts with:
 
@@ -1131,6 +1139,247 @@ The copied Glymur kernel is managed separately. An ordinary Arch update does not
 For now, retain the working kernel and installer USB while preparing updates. A future Arch package for the kernel, device tree, and supporting configuration would make this easier to maintain.
 
 Nix does not need to be installed on the A14 for this system to run. It can remain on your other Linux computer for future kernel and ISO builds.
+
+</details>
+
+
+<a id="installing-from-windows-wsl2"></a>
+
+<details>
+<summary><strong>Installing from Windows</strong></summary>
+
+If your only computer is the A14 running Windows, you can build the installer on that same laptop using **Windows Subsystem for Linux 2 (WSL2)**.
+
+WSL2 runs a Linux environment inside Windows. You will install Ubuntu in WSL, use Nix to build the A14 ISO, and write it to a USB drive from Windows. After booting the USB, you can install either NixOS or Arch Linux ARM using the guides above.
+
+Windows remains your operating system while you prepare the installer. Installing Ubuntu in WSL does not repartition the SSD or replace Windows. On the ARM64 A14, an ARM64 Ubuntu environment uses the project's native ARM64 build.
+
+**You will need:**
+
+* The A14 running Windows 11 with administrator access and WSL2 support.
+* An internet connection and substantial free SSD space for WSL, build dependencies, and the ISO.
+* A spare USB drive large enough for the generated ISO.
+* Your extracted Windows firmware and a separate backup of anything you want to keep.
+
+**Status: experimental.** Nix documents installation under WSL2, but this project's complete ISO build under WSL and subsequent physical USB boot have not yet been tested. Keep Windows intact until the USB boots and you have checked the hardware needed for installation.
+
+---
+
+**1. Install Ubuntu through WSL2**
+
+In Windows, open **PowerShell as Administrator** and run:
+
+```powershell
+wsl --install -d Ubuntu
+```
+
+Restart Windows if requested, then open **Ubuntu** from the Start menu. Complete its initial setup by choosing a Linux username and password. These are for the temporary build environment and can differ from your Windows account.
+
+In PowerShell, check:
+
+```powershell
+wsl --list --verbose
+```
+
+Ubuntu should show **VERSION 2**. If it shows version 1, convert it:
+
+```powershell
+wsl --set-version Ubuntu 2
+```
+
+If installation or startup fails, follow [Microsoft's WSL installation instructions](https://learn.microsoft.com/en-us/windows/wsl/install) before continuing.
+
+---
+
+**2. Check Ubuntu and systemd**
+
+In the **Ubuntu terminal**, run:
+
+```bash
+uname -m
+ps -p 1 -o comm=
+```
+
+Expect `aarch64` and `systemd`. The second check confirms that the service manager needed by the Nix daemon is running.
+
+Current Ubuntu WSL installations normally enable systemd. If the second command does not show it, edit this file inside Ubuntu:
+
+```bash
+sudo nano /etc/wsl.conf
+```
+
+Add the following, or update the setting under an existing `[boot]` section:
+
+```ini
+[boot]
+systemd=true
+```
+
+Save with **Ctrl+O**, press **Enter**, then exit with **Ctrl+X**. Close Ubuntu, save any work in other WSL sessions, and run this in **PowerShell**:
+
+```powershell
+wsl --shutdown
+```
+
+Reopen Ubuntu and repeat the checks. See [Microsoft's systemd instructions](https://learn.microsoft.com/en-us/windows/wsl/systemd) if needed.
+
+---
+
+**3. Install Nix inside Ubuntu**
+
+In the **Ubuntu terminal**, install the basic tools:
+
+```bash
+sudo apt update
+sudo apt install git curl ca-certificates nano
+```
+
+Install Nix from your normal Ubuntu account:
+
+```bash
+curl --proto '=https' --tlsv1.2 -L \
+  https://nixos.org/nix/install \
+  -o /tmp/install-nix
+
+sh /tmp/install-nix --daemon
+```
+
+Follow the prompts, then close and reopen Ubuntu. Check:
+
+```bash
+nix --version
+```
+
+Enable flakes:
+
+```bash
+mkdir -p ~/.config/nix
+nano ~/.config/nix/nix.conf
+```
+
+Add the following setting, or add these features to its existing line:
+
+```ini
+experimental-features = nix-command flakes
+```
+
+This is the multi-user WSL2 installation described in the [official Nix instructions](https://nixos.org/download/).
+
+---
+
+**4. Download the project and collect the Windows firmware**
+
+In **Ubuntu**, clone the project into your Linux home directory:
+
+```bash
+cd ~
+git clone https://github.com/chrispouliot/linux-zenbook-a14-arm.git
+cd linux-zenbook-a14-arm
+```
+
+Keep the project and builds here, rather than under `/mnt/c/`. This avoids the performance and filesystem differences of building directly on the Windows drive. [Microsoft's filesystem guidance](https://learn.microsoft.com/en-us/windows/wsl/filesystems).
+
+In **Windows**, follow [the firmware collection guide](docs/firmware.md). Download and extract the project ZIP if you need a Windows-accessible copy of the collector. From that extracted project directory in an elevated PowerShell terminal, you can collect into your Windows user folder with:
+
+```powershell
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\Collect-A14Firmware.ps1 -Destination "$env:USERPROFILE\a14-firmware"
+```
+
+If you already have the extracted files, reuse them. If collection reports missing files, follow the firmware guide before proceeding.
+
+Copy the resulting directory into Ubuntu. Run this in **Ubuntu**, replacing `YOUR_WINDOWS_USERNAME` with the actual Windows user-folder name:
+
+```bash
+cp -r "/mnt/c/Users/YOUR_WINDOWS_USERNAME/a14-firmware" \
+  "$HOME/a14-firmware"
+```
+
+Adjust the source path if your files are stored elsewhere. The Windows folder name may differ from your display name or Ubuntu username.
+
+Validate the copied files from the project directory:
+
+```bash
+nix run .#firmware -- validate "$HOME/a14-firmware" --strict
+```
+
+Resolve missing files or reference-hash differences before continuing. Keep a firmware backup outside both Windows and WSL, somewhere that will not be erased when you write the installer USB or install Linux.
+
+---
+
+**5. Build the A14 ISO inside WSL**
+
+In **Ubuntu**, from `~/linux-zenbook-a14-arm`:
+
+```bash
+nix build .#iso \
+  --override-input windows-firmware "path:$HOME/a14-firmware" \
+  --no-write-lock-file \
+  --out-link result-a14-iso \
+  -L
+```
+
+Keep the pinned inputs unchanged for the first build. Since `uname -m` reported `aarch64`, Nix uses the native ARM64 build; no x86 cross-compilation is required.
+
+The first build can take considerable time and disk space. Keep the A14 plugged in and prevent Windows from sleeping during the build. WSL uses a virtual disk stored on your Windows drive, so it consumes that drive's free space too.
+
+When the build succeeds, list the ISO:
+
+```bash
+ls -lh result-a14-iso/iso/
+```
+
+If it fails, retain the error output. The WSL build route still needs validation; do not proceed as though a failed build produced a usable installer.
+
+---
+
+**6. Copy the ISO back to Windows**
+
+In **Ubuntu**, replace the Windows username and copy the ISO into Downloads:
+
+```bash
+cp result-a14-iso/iso/*.iso \
+  "/mnt/c/Users/YOUR_WINDOWS_USERNAME/Downloads/"
+```
+
+If Downloads is redirected elsewhere, use its actual path.
+
+Wait for the copy to finish. The ISO should then be visible in Windows File Explorer. It contains your supplied Windows firmware; keep it private unless you have permission to redistribute those files.
+
+---
+
+**7. Write the USB from Windows**
+
+Download the **Windows ARM64** version of [Rufus](https://rufus.ie/en/) and run it in Windows.
+
+1. Insert your spare USB drive.
+2. In Rufus, select that drive under **Device**.
+3. Select the ISO you copied into Downloads.
+4. Check the USB model and capacity, then choose **Start**.
+5. If Rufus offers ISO Image mode or DD Image mode, choose **DD Image mode** for this installer to preserve the generated image layout.
+6. Wait until writing is complete.
+
+**Writing the image erases the selected USB drive.** Do not store your only firmware backup on the drive being overwritten. Rufus documents its image-writing modes in its [FAQ](https://github.com/pbatard/rufus/wiki/FAQ).
+
+If Windows later offers to format a partition on the installer USB, cancel that prompt.
+
+---
+
+**8. Boot the USB and choose which distribution to install**
+
+Back up your files and Windows recovery key before changing boot settings or partitions. Disable Secure Boot for this unsigned custom installer, then boot the USB's UEFI entry. Windows **Advanced startup → Use a device** may expose it; firmware menus vary.
+
+Keep the lid open and initially disconnect external displays and docks. Check that the live environment can use the keyboard, SSD, and network before modifying the SSD.
+
+Then expand the guide for your chosen distribution and continue at its boot step:
+
+| Install this system | Continue here |
+| --- | --- |
+| NixOS | [Installing NixOS ARM](#installing-nixos-arm), **step 5: Boot the installer on the A14** |
+| Arch Linux ARM | [Installing Arch Linux ARM](#installing-arch-linux-arm), **step 5: Boot the USB on the A14** |
+
+You have already completed the ISO-building and USB-writing steps. The same USB works as the live environment for either installation route.
+
+**Run all SSD partitioning and installation commands after booting the USB, not inside WSL.** Removing Windows also removes WSL and the files stored inside it. Keep your backups separate and retain the installer USB for recovery.
 
 </details>
 
