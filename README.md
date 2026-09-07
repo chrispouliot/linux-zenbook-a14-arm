@@ -9,7 +9,11 @@ This project is not responsible for the initial device tree mainlining or A14 su
 <details>
 <summary><strong>Current hardware status</strong></summary>
 
+
 Status reflects the currently used **NixOS configuration on the UX3407NA with the project's patched Glymur kernel and required firmware**. It does not mean the new installer ISO or every peripheral has been validated. Arch users also need the equivalent userspace configuration, particularly for audio.
+
+Overall I use this as my daily driver and it works very well. Please note webcam/microphone are not yet working and the USB 4 limitations.
+
 
 | Feature | Status | Patches, workarounds or remaining limitations |
 | --- | --- | --- |
