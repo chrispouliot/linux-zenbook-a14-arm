@@ -1,6 +1,6 @@
-# NixOS on the ASUS Zenbook A14
+# Linux on the ASUS Zenbook A14 X2E
 
-NixOS hardware support for the **ASUS Zenbook A14 UX3407NA with Snapdragon X2 Elite (Glymur)**. Import one module to use the patched kernel, device tree, firmware integration, and audio, USB and suspend workarounds. Your applications, desktop and power governor settings stay in your own configuration.
+Linux/NixOS hardware support for the **ASUS Zenbook A14 UX3407NA with Snapdragon X2 Elite**. Import one module to use the patched kernel, device tree, firmware integration, and audio, USB and suspend workarounds. Your applications, desktop and power governor settings stay in your own configuration.
 
 The project also builds an ARM64 NixOS installer ISO. It currently uses the pinned **7.2.0-rc5-next-20260731** Glymur kernel. Support is still evolving; see the [hardware notes](docs/hardware.md) for current limitations, including external display link limits. Earlier Snapdragon X1 A14 models are outside this project's scope.
 
