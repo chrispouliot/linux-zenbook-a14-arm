@@ -1,0 +1,336 @@
+Subject: [A14 platform 09/18] phy startup
+
+Extracted mechanically from Python rewrite 9 in the tested postPatch recipe.
+No resulting source changes; existing diagnostics and workarounds are retained.
+Apply in the order in kernel/a14-post-patch.nix, after its DT appends.
+The existing bank0 patch remains between platform patches 09 and 10.
+
+diff --git a/drivers/gpu/drm/msm/dp/dp_ctrl.c b/drivers/gpu/drm/msm/dp/dp_ctrl.c
+--- a/drivers/gpu/drm/msm/dp/dp_ctrl.c
++++ b/drivers/gpu/drm/msm/dp/dp_ctrl.c
+@@ -1792,24 +1792,46 @@
+ 
+ static int msm_dp_ctrl_enable_mainlink_clocks(struct msm_dp_ctrl_private *ctrl)
+ {
+-	int ret = 0;
+ 	struct phy *phy = ctrl->phy;
+ 	const u8 *dpcd = ctrl->panel->dpcd;
++	int ret;
+ 
+ 	ctrl->phy_opts.dp.lanes = ctrl->link->link_params.num_lanes;
+ 	ctrl->phy_opts.dp.link_rate = ctrl->link->link_params.rate / 100;
+ 	ctrl->phy_opts.dp.ssc = drm_dp_max_downspread(dpcd);
+ 
+-	phy_configure(phy, &ctrl->phy_opts);
+-	phy_power_on(phy);
+-
+-	dev_pm_opp_set_rate(ctrl->dev, ctrl->link->link_params.rate * 1000);
++	ret = phy_configure(phy, &ctrl->phy_opts);
++	if (ret) {
++		DRM_ERROR("A14-DP: failed to configure DP PHY. ret=%d\n", ret);
++		return ret;
++	}
++
++	ret = phy_power_on(phy);
++	if (ret) {
++		DRM_ERROR("A14-DP: failed to power on DP PHY. ret=%d\n", ret);
++		return ret;
++	}
++
++	ret = dev_pm_opp_set_rate(ctrl->dev,
++				  ctrl->link->link_params.rate * 1000);
++	if (ret) {
++		DRM_ERROR("A14-DP: failed to set DP OPP rate. ret=%d\n", ret);
++		goto power_off_phy;
++	}
++
+ 	ret = msm_dp_ctrl_link_clk_enable(&ctrl->msm_dp_ctrl);
+-	if (ret)
++	if (ret) {
+ 		DRM_ERROR("Unable to start link clocks. ret=%d\n", ret);
++		goto power_off_phy;
++	}
+ 
+ 	drm_dbg_dp(ctrl->drm_dev, "link rate=%d\n", ctrl->link->link_params.rate);
+ 
++	return 0;
++
++power_off_phy:
++	/* Balance the successful phy_power_on() before returning failure. */
++	phy_power_off(phy);
+ 	return ret;
+ }
+ 
+diff --git a/drivers/phy/qualcomm/phy-qcom-qmp-combo.c b/drivers/phy/qualcomm/phy-qcom-qmp-combo.c
+--- a/drivers/phy/qualcomm/phy-qcom-qmp-combo.c
++++ b/drivers/phy/qualcomm/phy-qcom-qmp-combo.c
+@@ -3149,29 +3149,6 @@
+ 	return 0;
+ }
+ 
+-static bool qmp_v8_combo_configure_dp_mode(struct qmp_combo *qmp)
+-{
+-	bool reverse = (qmp->orientation == TYPEC_ORIENTATION_REVERSE);
+-	const struct phy_configure_opts_dp *dp_opts = &qmp->dp_opts;
+-	u32 val;
+-
+-	val = DP_PHY_PD_CTL_PWRDN | DP_PHY_PD_CTL_AUX_PWRDN |
+-		DP_PHY_PD_CTL_LANE_0_1_PWRDN | DP_PHY_PD_CTL_LANE_2_3_PWRDN |
+-		DP_PHY_PD_CTL_PLL_PWRDN | DP_PHY_PD_CTL_DP_CLAMP_EN;
+-
+-	if (dp_opts->lanes == 1 || dp_opts->lanes == 2) {
+-		if (reverse)
+-			val &= ~DP_PHY_PD_CTL_LANE_2_3_PWRDN;
+-		else
+-			val &= ~DP_PHY_PD_CTL_LANE_0_1_PWRDN;
+-	}
+-
+-	writel(val, qmp->dp_dp_phy + QSERDES_DP_PHY_PD_CTL);
+-
+-	writel(0x5c, qmp->dp_dp_phy + QSERDES_DP_PHY_MODE);
+-
+-	return reverse;
+-}
+ 
+ static void qmp_v3_configure_dp_tx(struct qmp_combo *qmp)
+ {
+@@ -3360,45 +3337,98 @@
+ 
+ 	writel(0x0f, qmp->dp_dp_phy + QSERDES_DP_PHY_CFG_1);
+ 
+-	qmp_v8_combo_configure_dp_mode(qmp);
++	qmp_combo_configure_dp_mode(qmp);
+ 
+ 	writel(0x13, qmp->dp_dp_phy + QSERDES_DP_PHY_AUX_CFG1);
+-	writel(0xa4, qmp->dp_dp_phy + QSERDES_DP_PHY_AUX_CFG2);
++	writel(0x06, qmp->dp_dp_phy + QSERDES_DP_PHY_AUX_CFG2);
+ 
+ 	writel(0x05, qmp->dp_dp_phy + QSERDES_V4_DP_PHY_TX0_TX1_LANE_CTL);
+ 	writel(0x05, qmp->dp_dp_phy + QSERDES_V4_DP_PHY_TX2_TX3_LANE_CTL);
+ 
+ 	ret = qmp->cfg->configure_dp_clocks(qmp);
+-	if (ret)
++	if (ret) {
++		dev_err(qmp->dev,
++			"A14-DP: QMP v8 clock configuration failed ret=%d rate=%u lanes=%u orientation=%u\n",
++			ret, qmp->dp_opts.link_rate, qmp->dp_opts.lanes,
++			qmp->orientation);
+ 		return ret;
++	}
+ 
+ 	writel(0x01, qmp->dp_dp_phy + QSERDES_DP_PHY_CFG);
+ 	writel(0x05, qmp->dp_dp_phy + QSERDES_DP_PHY_CFG);
+ 	writel(0x01, qmp->dp_dp_phy + QSERDES_DP_PHY_CFG);
+ 	writel(0x09, qmp->dp_dp_phy + QSERDES_DP_PHY_CFG);
+ 
++	dev_info(qmp->dev,
++			"A14-DP: QMP pre-start common reset=%#x c_ready=%#x cmn=%#x bias=%#x clk_fwd=%#x ip_dp=%#x\n",
++			readl(qmp->dp_serdes + cfg->regs[QPHY_COM_RESETSM_CNTRL]),
++			readl(qmp->dp_serdes + cfg->regs[QPHY_COM_C_READY_STATUS]),
++			readl(qmp->dp_serdes + cfg->regs[QPHY_COM_CMN_STATUS]),
++			readl(qmp->dp_serdes + cfg->regs[QPHY_COM_BIAS_EN_CLKBUFLR_EN]),
++			readl(qmp->dp_serdes + QSERDES_V8_USB43_COM_CLK_FWD_CONFIG_1),
++			readl(qmp->dp_serdes + QSERDES_V8_USB43_COM_IP_CTRL_AND_DP_SEL));
++	dev_info(qmp->dev,
++			"A14-DP: QMP pre-start rate hsclk=%#x dec=%#x lock1=%#x lock2=%#x\n",
++			readl(qmp->dp_serdes + QSERDES_V8_USB43_COM_HSCLK_SEL_1),
++			readl(qmp->dp_serdes + QSERDES_V8_USB43_COM_DEC_START_MODE0),
++			readl(qmp->dp_serdes + QSERDES_V8_USB43_COM_LOCK_CMP1_MODE0),
++			readl(qmp->dp_serdes + QSERDES_V8_USB43_COM_LOCK_CMP2_MODE0));
++	dev_info(qmp->dev,
++			"A14-DP: QMP pre-start phy pd=%#x mode=%#x cfg=%#x cfg1=%#x aux2=%#x status=%#x\n",
++			readl(qmp->dp_dp_phy + QSERDES_DP_PHY_PD_CTL),
++			readl(qmp->dp_dp_phy + QSERDES_DP_PHY_MODE),
++			readl(qmp->dp_dp_phy + QSERDES_DP_PHY_CFG),
++			readl(qmp->dp_dp_phy + QSERDES_DP_PHY_CFG_1),
++			readl(qmp->dp_dp_phy + QSERDES_DP_PHY_AUX_CFG2),
++			readl(qmp->dp_dp_phy + cfg->regs[QPHY_DP_PHY_STATUS]));
++
+ 	writel(0x20, qmp->dp_serdes + cfg->regs[QPHY_COM_RESETSM_CNTRL]);
+ 
+-	if (readl_poll_timeout(qmp->dp_serdes + cfg->regs[QPHY_COM_C_READY_STATUS],
+-			status,
+-			((status & BIT(0)) > 0),
+-			500,
+-			10000))
+-		return -ETIMEDOUT;
+-
+-	if (readl_poll_timeout(qmp->dp_serdes + cfg->regs[QPHY_COM_CMN_STATUS],
+-			status,
+-			((status & BIT(0)) > 0),
+-			500,
+-			10000))
+-		return -ETIMEDOUT;
+-
+-	if (readl_poll_timeout(qmp->dp_serdes + cfg->regs[QPHY_COM_CMN_STATUS],
+-			status,
+-			((status & BIT(1)) > 0),
+-			500,
+-			10000))
+-		return -ETIMEDOUT;
++	ret = readl_poll_timeout(
++		qmp->dp_serdes + cfg->regs[QPHY_COM_C_READY_STATUS],
++		status, status & BIT(0), 500, 50000);
++	dev_info(qmp->dev,
++			"A14-DP: QMP C_READY result ret=%d status=%#x reset=%#x cmn=%#x timeout_us=50000\n",
++			ret, status,
++			readl(qmp->dp_serdes + cfg->regs[QPHY_COM_RESETSM_CNTRL]),
++			readl(qmp->dp_serdes + cfg->regs[QPHY_COM_CMN_STATUS]));
++	dev_info(qmp->dev,
++			"A14-DP: QMP C_READY phy pd=%#x mode=%#x cfg=%#x cfg1=%#x aux2=%#x status=%#x\n",
++			readl(qmp->dp_dp_phy + QSERDES_DP_PHY_PD_CTL),
++			readl(qmp->dp_dp_phy + QSERDES_DP_PHY_MODE),
++			readl(qmp->dp_dp_phy + QSERDES_DP_PHY_CFG),
++			readl(qmp->dp_dp_phy + QSERDES_DP_PHY_CFG_1),
++			readl(qmp->dp_dp_phy + QSERDES_DP_PHY_AUX_CFG2),
++			readl(qmp->dp_dp_phy + cfg->regs[QPHY_DP_PHY_STATUS]));
++	if (ret) {
++		dev_err(qmp->dev,
++			"A14-DP: QMP v8 helper C_READY timeout status=%#x rate=%u lanes=%u orientation=%u\n",
++			status, qmp->dp_opts.link_rate, qmp->dp_opts.lanes,
++			qmp->orientation);
++		return ret;
++	}
++
++	ret = readl_poll_timeout(
++		qmp->dp_serdes + cfg->regs[QPHY_COM_CMN_STATUS],
++		status, status & BIT(0), 500, 10000);
++	if (ret) {
++		dev_err(qmp->dev,
++			"A14-DP: QMP v8 helper CMN bit0 timeout status=%#x rate=%u lanes=%u orientation=%u\n",
++			status, qmp->dp_opts.link_rate, qmp->dp_opts.lanes,
++			qmp->orientation);
++		return ret;
++	}
++
++	ret = readl_poll_timeout(
++		qmp->dp_serdes + cfg->regs[QPHY_COM_CMN_STATUS],
++		status, status & BIT(1), 500, 10000);
++	if (ret) {
++		dev_err(qmp->dev,
++			"A14-DP: QMP v8 helper CMN bit1 timeout status=%#x rate=%u lanes=%u orientation=%u\n",
++			status, qmp->dp_opts.link_rate, qmp->dp_opts.lanes,
++			qmp->orientation);
++		return ret;
++	}
+ 
+ 	return 0;
+ }
+@@ -3634,8 +3664,13 @@
+ 	int ret;
+ 
+ 	ret = qmp_v8_helper_configure_dp_phy(qmp);
+-	if (ret < 0)
++	if (ret < 0) {
++		dev_err(qmp->dev,
++			"A14-DP: QMP v8 helper failed ret=%d rate=%u lanes=%u orientation=%u\n",
++			ret, dp_opts->link_rate, dp_opts->lanes,
++			qmp->orientation);
+ 		return ret;
++	}
+ 
+ 	if (dp_opts->lanes == 1) {
+ 		bias0_en = reverse ? 0x3e : 0x15;
+@@ -3672,26 +3707,38 @@
+ 	writel(0x09, qmp->dp_dp_phy + QSERDES_DP_PHY_CFG);
+ 	udelay(500);
+ 
+-	if (readl_poll_timeout(qmp->dp_dp_phy + cfg->regs[QPHY_DP_PHY_STATUS],
+-			status,
+-			((status & BIT(0)) > 0),
+-			500,
+-			10000))
+-		return -ETIMEDOUT;
+-
+-	if (readl_poll_timeout(qmp->dp_serdes + cfg->regs[QPHY_COM_CMN_STATUS],
+-			status,
+-			((status & BIT(0)) > 0),
+-			500,
+-			10000))
+-		return -ETIMEDOUT;
+-
+-	if (readl_poll_timeout(qmp->dp_serdes + cfg->regs[QPHY_COM_CMN_STATUS],
+-			status,
+-			((status & BIT(1)) > 0),
+-			500,
+-			10000))
+-		return -ETIMEDOUT;
++	ret = readl_poll_timeout(
++		qmp->dp_dp_phy + cfg->regs[QPHY_DP_PHY_STATUS],
++		status, status & BIT(0), 500, 10000);
++	if (ret) {
++		dev_err(qmp->dev,
++			"A14-DP: QMP v8 DP PHY ready timeout status=%#x rate=%u lanes=%u orientation=%u\n",
++			status, dp_opts->link_rate, dp_opts->lanes,
++			qmp->orientation);
++		return ret;
++	}
++
++	ret = readl_poll_timeout(
++		qmp->dp_serdes + cfg->regs[QPHY_COM_CMN_STATUS],
++		status, status & BIT(0), 500, 10000);
++	if (ret) {
++		dev_err(qmp->dev,
++			"A14-DP: QMP v8 final CMN bit0 timeout status=%#x rate=%u lanes=%u orientation=%u\n",
++			status, dp_opts->link_rate, dp_opts->lanes,
++			qmp->orientation);
++		return ret;
++	}
++
++	ret = readl_poll_timeout(
++		qmp->dp_serdes + cfg->regs[QPHY_COM_CMN_STATUS],
++		status, status & BIT(1), 500, 10000);
++	if (ret) {
++		dev_err(qmp->dev,
++			"A14-DP: QMP v8 final CMN bit1 timeout status=%#x rate=%u lanes=%u orientation=%u\n",
++			status, dp_opts->link_rate, dp_opts->lanes,
++			qmp->orientation);
++		return ret;
++	}
+ 
+ 	return 0;
+ }
+@@ -3944,8 +3991,18 @@
+ 	const struct qmp_phy_cfg *cfg = qmp->cfg;
+ 	void __iomem *tx = qmp->dp_tx;
+ 	void __iomem *tx2 = qmp->dp_tx2;
++	int ret;
+ 
+ 	mutex_lock(&qmp->phy_mutex);
++
++	dev_info(qmp->dev,
++		"A14-DP: QMP power-on enter init=%d usb_init=%u dp_init=%u powered=%u qmp_mode=%u phy_mode=%u orientation=%u com_reset=%#x typec=%#x mode_ctrl=%#x\n",
++		qmp->init_count, qmp->usb_init_count, qmp->dp_init_count,
++		qmp->dp_powered_on, qmp->qmpphy_mode, qmp->phy_mode,
++		qmp->orientation,
++		readl(qmp->com + QPHY_V3_DP_COM_RESET_OVRD_CTRL),
++		readl(qmp->com + QPHY_V3_DP_COM_TYPEC_CTRL),
++		readl(qmp->com + QPHY_V3_DP_COM_PHY_MODE_CTRL));
+ 
+ 	qmp_combo_dp_serdes_init(qmp);
+ 
+@@ -3956,13 +4013,20 @@
+ 	cfg->configure_dp_tx(qmp);
+ 
+ 	/* Configure link rate, swing, etc. */
+-	cfg->configure_dp_phy(qmp);
+-
+-	qmp->dp_powered_on = true;
++	ret = cfg->configure_dp_phy(qmp);
++	if (ret) {
++		dev_err(qmp->dev,
++			"A14-DP: DP PHY configuration failed: %d\n", ret);
++		writel(DP_PHY_PD_CTL_PSR_PWRDN,
++		       qmp->dp_dp_phy + QSERDES_DP_PHY_PD_CTL);
++		qmp->dp_powered_on = false;
++	} else {
++		qmp->dp_powered_on = true;
++	}
+ 
+ 	mutex_unlock(&qmp->phy_mutex);
+ 
+-	return 0;
++	return ret;
+ }
+ 
+ static int qmp_combo_dp_power_off(struct phy *phy)

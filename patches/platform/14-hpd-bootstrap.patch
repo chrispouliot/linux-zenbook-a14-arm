@@ -1,0 +1,107 @@
+Subject: [A14 platform 14/18] hpd bootstrap
+
+Extracted mechanically from Python rewrite 14 in the tested postPatch recipe.
+No resulting source changes; existing diagnostics and workarounds are retained.
+Apply in the order in kernel/a14-post-patch.nix, after its DT appends.
+The existing bank0 patch remains between platform patches 09 and 10.
+
+diff --git a/drivers/soc/qcom/pmic_glink_altmode.c b/drivers/soc/qcom/pmic_glink_altmode.c
+--- a/drivers/soc/qcom/pmic_glink_altmode.c
++++ b/drivers/soc/qcom/pmic_glink_altmode.c
+@@ -113,6 +113,11 @@
+ 	struct pmic_glink_altmode *altmode;
+ 	unsigned int index;
+ 
++	/* A14: successful DP mux/retimer setup, not link-training status. */
++	bool a14_dp_configured;
++	enum typec_orientation a14_dp_orientation;
++	u8 a14_dp_mode;
++
+ 	struct typec_switch *typec_switch;
+ 	struct typec_mux *typec_mux;
+ 	struct typec_mux_state state;
+@@ -249,6 +254,9 @@
+ {
+ 	struct typec_displayport_data dp_data = {};
+ 	int ret;
++	bool configured = true;
++
++	port->a14_dp_configured = false;
+ 
+ 	dp_data.status = DP_STATUS_ENABLED;
+ 	if (hpd_state)
+@@ -262,16 +270,26 @@
+ 	port->state.mode = TYPEC_MODAL_STATE(mode);
+ 
+ 	ret = typec_mux_set(port->typec_mux, &port->state);
+-	if (ret)
++	if (ret) {
++		configured = false;
+ 		dev_err(altmode->dev, "failed to switch mux to DP: %d\n", ret);
++	}
+ 
+ 	port->retimer_state.alt = &port->dp_alt;
+ 	port->retimer_state.data = &dp_data;
+ 	port->retimer_state.mode = TYPEC_MODAL_STATE(mode);
+ 
+ 	ret = typec_retimer_set(port->typec_retimer, &port->retimer_state);
+-	if (ret)
++	if (ret) {
++		configured = false;
+ 		dev_err(altmode->dev, "failed to setup retimer to DP: %d\n", ret);
++	}
++	if (configured && hpd_state &&
++	    port->orientation != TYPEC_ORIENTATION_NONE) {
++		port->a14_dp_orientation = port->orientation;
++		port->a14_dp_mode = mode;
++		port->a14_dp_configured = true;
++	}
+ }
+ 
+ static void pmic_glink_altmode_enable_tbt(struct pmic_glink_altmode *altmode,
+@@ -429,24 +447,42 @@
+ 		 alt_port->hpd_irq,
+ 		 alt_port->orientation);
+ 
++	/* A changed or disconnected path requires a fresh DP setup. */
++	if (alt_port->svid != USB_TYPEC_DP_SID ||
++	    !alt_port->hpd_state ||
++	    alt_port->mux_ctrl == MUX_CTRL_STATE_NO_CONN ||
++	    alt_port->orientation == TYPEC_ORIENTATION_NONE ||
++	    alt_port->a14_dp_orientation != alt_port->orientation ||
++	    alt_port->a14_dp_mode != alt_port->mode)
++		alt_port->a14_dp_configured = false;
++
+ 	typec_switch_set(alt_port->typec_switch, alt_port->orientation);
+ 
+ 	/*
+ 	 * ASUS A14 diagnostic workaround: this kernel cannot pass IRQ_HPD
+ 	 * separately from a real connector hotplug. Suppress IRQ-only
+-	 * notifications on the observed external-DP port while preserving
+-	 * HPD-high plug and HPD-low unplug notifications.
++	 * notifications only after successful DP mux/retimer setup. Initial
++	 * HPD-high may carry IRQ_HPD too; it must reach the setup/notify path.
+ 	 */
+ 	if (alt_port->index == 1 &&
+ 	    alt_port->svid == USB_TYPEC_DP_SID &&
+ 	    alt_port->hpd_state &&
+-	    alt_port->hpd_irq) {
++	    alt_port->hpd_irq && alt_port->a14_dp_configured) {
+ 		dev_info_ratelimited(altmode->dev,
+ 			"A14-DP: suppressing port 1 IRQ-only HPD notification\n");
+ 		pmic_glink_altmode_request(altmode, ALTMODE_PAN_ACK,
+ 					    alt_port->index);
+ 		return;
+ 	}
++
++	if (alt_port->index == 1 &&
++	    alt_port->svid == USB_TYPEC_DP_SID &&
++	    alt_port->mux_ctrl != MUX_CTRL_STATE_NO_CONN &&
++	    alt_port->hpd_state && alt_port->hpd_irq &&
++	    !alt_port->a14_dp_configured)
++		dev_info_ratelimited(altmode->dev,
++			"A14-DP: accepting IRQ-tagged HPD for initial DP setup port=%u\n",
++			alt_port->index);
+ 
+ 	/*
+ 	 * MUX_CTRL_STATE_DP4LN/USB3_DP may only be set if SVID=DP, but we need

@@ -8,8 +8,9 @@ generic dock compatibility or prove that every retained workaround is needed.
 ## Layout and patch order
 
 `kernel.nix` retains kernel configuration and the initial platform patches.
-`kernel/a14-post-patch.nix` runs the existing platform transformations, followed
-by this display series:
+`kernel/a14-post-patch.nix` appends the existing DT fragments, applies the
+[extracted platform patches](PLATFORM.md), and runs retained source checks,
+followed by this display series:
 
 | Order | Patch | Purpose |
 | --- | --- | --- |
@@ -32,10 +33,11 @@ The previous `a14-display-stack.patch` is replaced by their combined result.
 - `docs/display/HISTORY.md`: investigation decisions and test results.
 - `docs/display/history/`: historical notes, not current instructions.
 
-The older platform transformations remain verbatim in the postPatch expression.
-Extracting those into ordinary patches, removing diagnostics, and deleting
-obsolete runtime alternatives are separate follow-up changes. Firmware, audio,
-USB, SCMI, flake inputs, and the base hardware module are unchanged by this split.
+The eighteen older Python rewrites have been extracted into ordinary patches
+under `patches/platform/`. Their resulting source is unchanged. Removing
+diagnostics and deleting obsolete runtime alternatives remain separate
+follow-up changes. Firmware, audio,
+USB, SCMI, flake inputs, and the base hardware module are unchanged by this extraction.
 
 ## Working configuration
 
@@ -85,17 +87,17 @@ sink cleanup retain their disabled settings. AUX/state diagnostics remain on.
 Historical experiment installers target the old layout and must not be applied
 to this reorganized stack.
 
-## Install this split
+## Install the platform-patch extraction
 
 Run the supplied installer as your normal user:
 
 ```sh
 nix shell nixpkgs#python3 --command python3 \
-  ~/Downloads/a14-split-display-series.py \
+  ~/Downloads/a14-extract-platform-patches.py \
   ~/Projects/linux-zenbook-a14-arm --check
 
 nix shell nixpkgs#python3 --command python3 \
-  ~/Downloads/a14-split-display-series.py \
+  ~/Downloads/a14-extract-platform-patches.py \
   ~/Projects/linux-zenbook-a14-arm
 
 cd ~/Projects/linux-zenbook-a14-arm
@@ -103,18 +105,18 @@ git diff --stat
 git status --short
 ```
 
-The installer checks the existing tested cleanup before any edits. It preserves
+The installer checks the tested four-patch display layout before any edits. It preserves
 unrelated files and the Git index and creates no backup. `--check` is read-only;
-repeating installation is a no-op. `--remove` restores the previous combined
-patch layout if the affected files have not changed. Git history remains the
+repeating installation is a no-op. `--remove` restores the previous Python-rewrite
+recipe if the affected files have not changed. Git history remains the
 long-term restore point. The baseline matches the relevant files in public
-commit `810f28ccb774db5cd5891df64e18fdb9de072bf7`; the installer checks file
+commit `d65db6f`; the installer checks file
 contents, not HEAD, so unrelated commits are allowed.
 
 Stage the new files so Git-backed flakes can include them, review, then rebuild:
 
 ```sh
-git add -A -- README.md kernel/a14-post-patch.nix patches docs/display tools/a14-verify-display-series.py
+git add -A -- README.md kernel/a14-post-patch.nix patches/platform docs/display tools/a14-verify-display-series.py
 git diff --cached --stat
 git diff --cached --check
 sudo nix flake update a14 --flake /etc/nixos
@@ -122,17 +124,18 @@ sudo nixos-rebuild boot --flake /etc/nixos#a14
 ```
 
 The installer does not stage, commit, push, rebuild, or reboot. Nix may rebuild
-the kernel because its patch inputs changed even though the resulting source is
+the kernel because its postPatch recipe and patch inputs changed even though the resulting source is
 identical. After a successful build, a normal dock boot and standby/wake check
 provide a practical integration check. Keep recovery disabled during that check
 if it is already disabled; this is not a new recovery experiment.
 
 ## Validation
 
-The four patches apply in order with zero fuzz and no offsets. Running the full
+The extracted platform patches and the four display patches apply in order
+with zero fuzz and no offsets. Running the full
 local default patch recipe against the pinned source produces the same hashes
 for all 38 reconstructed files as the tested combined stack. All option modules,
-recovery code, and the existing recorder are unchanged. No additional kernel
+recovery code, the four display patches, and the existing recorder are unchanged. No additional kernel
 compilation or hardware execution was needed for the source comparison. NixOS
 evaluation was not available in the packaging environment.
 
@@ -150,7 +153,7 @@ This tool executes the trusted repository's patch recipe in a new directory,
 never in the input kernel checkout. It does not build/install a kernel or
 evaluate Nixpkgs-inherited patches. The optional SCMI variant is outside this
 default-source comparison. Use `source-sha256.json` and the resulting log to
-review the comparison; the tool rejects changed series hashes and order.
+review the comparison; the tool rejects changed platform/display patch hashes and order.
 
 For device diagnostics:
 

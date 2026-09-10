@@ -1,0 +1,311 @@
+Subject: [A14 platform 11/18] hpd disconnect retention
+
+Extracted mechanically from Python rewrite 11 in the tested postPatch recipe.
+No resulting source changes; existing diagnostics and workarounds are retained.
+Apply in the order in kernel/a14-post-patch.nix, after its DT appends.
+The existing bank0 patch remains between platform patches 09 and 10.
+
+diff --git a/drivers/gpu/drm/bridge/aux-hpd-bridge.c b/drivers/gpu/drm/bridge/aux-hpd-bridge.c
+--- a/drivers/gpu/drm/bridge/aux-hpd-bridge.c
++++ b/drivers/gpu/drm/bridge/aux-hpd-bridge.c
+@@ -20,11 +20,12 @@
+ struct drm_aux_hpd_bridge_data {
+ 	struct drm_bridge bridge;
+ 	struct device *dev;
+-	/* Protects status, status_valid and hpd_enabled. */
++	/* Protects cached status, disconnect_pending and hpd_enabled. */
+ 	struct mutex status_lock;
+ 	struct work_struct replay_work;
+ 	enum drm_connector_status status;
+ 	bool status_valid;
++	bool disconnect_pending;
+ 	bool hpd_enabled;
+ };
+ 
+@@ -144,6 +145,18 @@
+ }
+ EXPORT_SYMBOL_GPL(drm_dp_hpd_bridge_register);
+ 
++/* Caller holds status_lock, serializing live and cached notifications. */
++static void drm_aux_hpd_bridge_notify_retained(struct drm_aux_hpd_bridge_data *data,
++					     enum drm_connector_status status)
++{
++	if (data->disconnect_pending && status != connector_status_disconnected) {
++		dev_info(data->dev, "A14-DP: replaying retained AUX HPD disconnect\n");
++		drm_bridge_hpd_notify(&data->bridge, connector_status_disconnected);
++	}
++	data->disconnect_pending = false;
++	drm_bridge_hpd_notify(&data->bridge, status);
++}
++
+ static void drm_aux_hpd_bridge_replay_work(struct work_struct *work)
+ {
+ 	struct drm_aux_hpd_bridge_data *data =
+@@ -160,7 +173,7 @@
+ 	data->status_valid = false;
+ 	dev_info(data->dev, "A14-DP: replaying cached AUX HPD status=%d\n",
+ 		 status);
+-	drm_bridge_hpd_notify(&data->bridge, status);
++	drm_aux_hpd_bridge_notify_retained(data, status);
+ 	mutex_unlock(&data->status_lock);
+ }
+ 
+@@ -211,6 +224,8 @@
+ 
+ 	mutex_lock(&data->status_lock);
+ 	if (!data->hpd_enabled) {
++		if (status == connector_status_disconnected)
++			data->disconnect_pending = true;
+ 		data->status = status;
+ 		data->status_valid = true;
+ 		dev_info_ratelimited(data->dev,
+@@ -220,9 +235,9 @@
+ 		return;
+ 	}
+ 
+-	/* A live event supersedes any replay that has not started yet. */
++	/* A live event replaces cached status, but must retain a cached low. */
+ 	data->status_valid = false;
+-	drm_bridge_hpd_notify(&data->bridge, status);
++	drm_aux_hpd_bridge_notify_retained(data, status);
+ 	mutex_unlock(&data->status_lock);
+ }
+ EXPORT_SYMBOL_GPL(drm_aux_hpd_bridge_notify);
+diff --git a/drivers/soc/qcom/pmic_glink_altmode.c b/drivers/soc/qcom/pmic_glink_altmode.c
+--- a/drivers/soc/qcom/pmic_glink_altmode.c
++++ b/drivers/soc/qcom/pmic_glink_altmode.c
+@@ -7,6 +7,7 @@
+ #include <linux/bitfield.h>
+ #include <linux/cleanup.h>
+ #include <linux/module.h>
++#include <linux/spinlock.h>
+ #include <linux/of.h>
+ #include <linux/of_device.h>
+ #include <linux/mutex.h>
+@@ -97,6 +98,17 @@
+ 
+ #define work_to_altmode_port(w) container_of((w), struct pmic_glink_altmode_port, work)
+ 
++/* A14: receive-side snapshots; live port fields belong to the worker. */
++struct pmic_glink_altmode_event {
++	enum typec_orientation orientation;
++	u16 svid;
++	struct usbc_sc8280x_tbt_data tbt_data;
++	u8 mode;
++	u8 hpd_state;
++	u8 hpd_irq;
++	u8 mux_ctrl;
++};
++
+ struct pmic_glink_altmode_port {
+ 	struct pmic_glink_altmode *altmode;
+ 	unsigned int index;
+@@ -110,6 +122,13 @@
+ 	struct typec_altmode tbt_alt;
+ 
+ 	struct work_struct work;
++
++	/* Protect only receive-side state; never hold across hardware calls. */
++	spinlock_t event_lock;
++	struct pmic_glink_altmode_event pending_event;
++	struct pmic_glink_altmode_event disconnect_event;
++	bool event_pending;
++	bool disconnect_pending;
+ 
+ 	struct auxiliary_device *bridge;
+ 
+@@ -140,6 +159,55 @@
+ 
+ 	struct pmic_glink_altmode_port ports[PMIC_GLINK_MAX_PORTS];
+ };
++
++/*
++ * A14: coalesce to the latest state, but retain a DP disconnect first.
++ * In particular, low/high while system_freezable_wq is frozen must not
++ * become only high. Storage is bounded and needs no atomic allocation.
++ */
++static void pmic_glink_altmode_queue_event(struct pmic_glink_altmode_port *port,
++				 const struct pmic_glink_altmode_event *event)
++{
++	unsigned long flags;
++
++	spin_lock_irqsave(&port->event_lock, flags);
++	if (event->svid == USB_TYPEC_DP_SID && !event->hpd_state) {
++		port->disconnect_event = *event;
++		port->disconnect_pending = true;
++		/* This newer low supersedes any undelivered high. */
++		port->event_pending = false;
++	} else {
++		port->pending_event = *event;
++		port->event_pending = true;
++	}
++	spin_unlock_irqrestore(&port->event_lock, flags);
++
++	if (!queue_work(system_freezable_wq, &port->work))
++		dev_info(port->altmode->dev,
++			 "A14-DP: coalesced work port=%u; event retained\n",
++			 port->index);
++}
++
++static bool pmic_glink_altmode_take_event(struct pmic_glink_altmode_port *port,
++					struct pmic_glink_altmode_event *event)
++{
++	unsigned long flags;
++	bool found = true;
++
++	spin_lock_irqsave(&port->event_lock, flags);
++	if (port->disconnect_pending) {
++		*event = port->disconnect_event;
++		port->disconnect_pending = false;
++	} else if (port->event_pending) {
++		*event = port->pending_event;
++		port->event_pending = false;
++	} else {
++		found = false;
++	}
++	spin_unlock_irqrestore(&port->event_lock, flags);
++
++	return found;
++}
+ 
+ static int pmic_glink_altmode_request(struct pmic_glink_altmode *altmode, u32 cmd, u32 arg)
+ {
+@@ -346,9 +414,8 @@
+ 		dev_err(altmode->dev, "failed to setup retimer to USB: %d\n", ret);
+ }
+ 
+-static void pmic_glink_altmode_worker(struct work_struct *work)
+-{
+-	struct pmic_glink_altmode_port *alt_port = work_to_altmode_port(work);
++static void pmic_glink_altmode_handle_event(struct pmic_glink_altmode_port *alt_port)
++{
+ 	struct pmic_glink_altmode *altmode = alt_port->altmode;
+ 	enum drm_connector_status conn_status;
+ 
+@@ -420,6 +487,38 @@
+ 	pmic_glink_altmode_request(altmode, ALTMODE_PAN_ACK, alt_port->index);
+ }
+ 
++static void pmic_glink_altmode_worker(struct work_struct *work)
++{
++	struct pmic_glink_altmode_port *port = work_to_altmode_port(work);
++	struct pmic_glink_altmode_event event;
++	unsigned int budget;
++
++	/* Bound each invocation even if notifications arrive continuously. */
++	for (budget = 0; budget < 8; budget++) {
++		if (!pmic_glink_altmode_take_event(port, &event))
++			return;
++
++		port->orientation = event.orientation;
++		port->svid = event.svid;
++		port->tbt_data = event.tbt_data;
++		port->mode = event.mode;
++		port->hpd_state = event.hpd_state;
++		port->hpd_irq = event.hpd_irq;
++		port->mux_ctrl = event.mux_ctrl;
++
++		if (event.svid == USB_TYPEC_DP_SID && !event.hpd_state)
++			dev_info(port->altmode->dev,
++				 "A14-DP: dispatching retained HPD-low port=%u\n",
++				 port->index);
++
++		/* The existing mux, retimer, DRM notification and ACK path. */
++		pmic_glink_altmode_handle_event(port);
++	}
++
++	/* Same workqueue preserves per-port worker serialization. */
++	queue_work(system_freezable_wq, &port->work);
++}
++
+ static enum typec_orientation pmic_glink_altmode_orientation(unsigned int orientation)
+ {
+ 	if (orientation == 0)
+@@ -441,6 +540,7 @@
+ 					       const void *data, size_t len)
+ {
+ 	struct pmic_glink_altmode_port *alt_port;
++	struct pmic_glink_altmode_event event = {};
+ 	const struct usbc_sc8180x_notify *msg;
+ 	u32 notification;
+ 	u8 orientation;
+@@ -477,15 +577,12 @@
+ 	}
+ 
+ 	alt_port = &altmode->ports[port];
+-	alt_port->orientation = pmic_glink_altmode_orientation(orientation);
+-	alt_port->svid = svid;
+-	alt_port->mode = mode;
+-	alt_port->hpd_state = hpd_state;
+-	alt_port->hpd_irq = hpd_irq;
+-	if (!queue_work(system_freezable_wq, &alt_port->work))
+-		dev_info(altmode->dev,
+-			 "A14-DP: queue_work returned false port=%u\n",
+-			 alt_port->index);
++	event.orientation = pmic_glink_altmode_orientation(orientation);
++	event.svid = svid;
++	event.mode = mode;
++	event.hpd_state = hpd_state;
++	event.hpd_irq = hpd_irq;
++	pmic_glink_altmode_queue_event(alt_port, &event);
+ }
+ 
+ #define SC8280XP_DPAM_MASK	0x3f
+@@ -496,6 +593,7 @@
+ 					       u16 svid, const void *data, size_t len)
+ {
+ 	struct pmic_glink_altmode_port *alt_port;
++	struct pmic_glink_altmode_event event = {};
+ 	const struct usbc_sc8280x_tbt_data *tbt;
+ 	const struct usbc_sc8280x_dp_data *dp;
+ 	const struct usbc_notify *notify;
+@@ -523,9 +621,9 @@
+ 	}
+ 
+ 	alt_port = &altmode->ports[port];
+-	alt_port->orientation = pmic_glink_altmode_orientation(orientation);
+-	alt_port->svid = svid;
+-	alt_port->mux_ctrl = notify->mux_ctrl;
++	event.orientation = pmic_glink_altmode_orientation(orientation);
++	event.svid = svid;
++	event.mux_ctrl = notify->mux_ctrl;
+ 
+ 	if (svid == USB_TYPEC_DP_SID) {
+ 		dp = &notify->extended_data.dp;
+@@ -534,20 +632,17 @@
+ 			 "A14-DP: RX8280-DP port=%u pin=%u hpd=%u irq=%u\n",
+ 			 port, dp->pin_assignment, dp->hpd_state, dp->hpd_irq);
+ 
+-		alt_port->mode = dp->pin_assignment - DPAM_HPD_A;
+-		alt_port->hpd_state = dp->hpd_state;
+-		alt_port->hpd_irq = dp->hpd_irq;
+-	} else if (alt_port->mux_ctrl == MUX_CTRL_STATE_TUNNELING) {
++		event.mode = dp->pin_assignment - DPAM_HPD_A;
++		event.hpd_state = dp->hpd_state;
++		event.hpd_irq = dp->hpd_irq;
++	} else if (event.mux_ctrl == MUX_CTRL_STATE_TUNNELING) {
+ 		/* Valid for both USB4 and TBT3 */
+ 		tbt = &notify->extended_data.tbt;
+ 
+-		alt_port->tbt_data = *tbt;
+-	}
+-
+-	if (!queue_work(system_freezable_wq, &alt_port->work))
+-		dev_info(altmode->dev,
+-			 "A14-DP: queue_work returned false port=%u\n",
+-			 alt_port->index);
++		event.tbt_data = *tbt;
++	}
++
++	pmic_glink_altmode_queue_event(alt_port, &event);
+ }
+ 
+ static void pmic_glink_altmode_callback(const void *data, size_t len, void *priv)
+@@ -660,6 +755,7 @@
+ 		alt_port = &altmode->ports[port];
+ 		alt_port->altmode = altmode;
+ 		alt_port->index = port;
++		spin_lock_init(&alt_port->event_lock);
+ 		INIT_WORK(&alt_port->work, pmic_glink_altmode_worker);
+ 
+ 		alt_port->bridge = devm_drm_dp_hpd_bridge_alloc(dev, to_of_node(fwnode));

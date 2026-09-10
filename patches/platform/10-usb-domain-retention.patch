@@ -1,0 +1,46 @@
+Subject: [A14 platform 10/18] usb domain retention
+
+Extracted mechanically from Python rewrite 10 in the tested postPatch recipe.
+No resulting source changes; existing diagnostics and workarounds are retained.
+Apply in the order in kernel/a14-post-patch.nix, after its DT appends.
+The existing bank0 patch remains between platform patches 09 and 10.
+
+diff --git a/drivers/clk/qcom/gcc-glymur.c b/drivers/clk/qcom/gcc-glymur.c
+--- a/drivers/clk/qcom/gcc-glymur.c
++++ b/drivers/clk/qcom/gcc-glymur.c
+@@ -7814,7 +7814,7 @@
+ 		.name = "gcc_usb30_prim_gdsc",
+ 	},
+ 	.pwrsts = PWRSTS_OFF_ON,
+-	.flags = POLL_CFG_GDSCR | RETAIN_FF_ENABLE,
++	.flags = POLL_CFG_GDSCR | RETAIN_FF_ENABLE | ALWAYS_ON,
+ };
+ 
+ static struct gdsc gcc_usb30_sec_gdsc = {
+@@ -7826,7 +7826,7 @@
+ 		.name = "gcc_usb30_sec_gdsc",
+ 	},
+ 	.pwrsts = PWRSTS_OFF_ON,
+-	.flags = POLL_CFG_GDSCR | RETAIN_FF_ENABLE,
++	.flags = POLL_CFG_GDSCR | RETAIN_FF_ENABLE | ALWAYS_ON,
+ };
+ 
+ static struct gdsc gcc_usb30_tert_gdsc = {
+@@ -7910,7 +7910,7 @@
+ 		.name = "gcc_usb_0_phy_gdsc",
+ 	},
+ 	.pwrsts = PWRSTS_OFF_ON,
+-	.flags = POLL_CFG_GDSCR | RETAIN_FF_ENABLE,
++	.flags = POLL_CFG_GDSCR | RETAIN_FF_ENABLE | ALWAYS_ON,
+ };
+ 
+ static struct gdsc gcc_usb_1_phy_gdsc = {
+@@ -7922,7 +7922,7 @@
+ 		.name = "gcc_usb_1_phy_gdsc",
+ 	},
+ 	.pwrsts = PWRSTS_OFF_ON,
+-	.flags = POLL_CFG_GDSCR | RETAIN_FF_ENABLE,
++	.flags = POLL_CFG_GDSCR | RETAIN_FF_ENABLE | ALWAYS_ON,
+ };
+ 
+ static struct gdsc gcc_usb_2_phy_gdsc = {

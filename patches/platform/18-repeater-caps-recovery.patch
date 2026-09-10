@@ -1,0 +1,78 @@
+Subject: [A14 platform 18/18] repeater caps recovery
+
+Extracted mechanically from Python rewrite 18 in the tested postPatch recipe.
+No resulting source changes; existing diagnostics and workarounds are retained.
+Apply in the order in kernel/a14-post-patch.nix, after its DT appends.
+The existing bank0 patch remains between platform patches 09 and 10.
+
+diff --git a/drivers/gpu/drm/msm/dp/dp_display.c b/drivers/gpu/drm/msm/dp/dp_display.c
+--- a/drivers/gpu/drm/msm/dp/dp_display.c
++++ b/drivers/gpu/drm/msm/dp/dp_display.c
+@@ -11,6 +11,7 @@
+ #include <linux/of_irq.h>
+ #include <linux/phy/phy.h>
+ #include <linux/delay.h>
++#include <linux/string.h>
+ #include <linux/string_choices.h>
+ #include <drm/display/drm_dp_aux_bus.h>
+ #include <drm/display/drm_hdmi_audio_helper.h>
+@@ -272,6 +273,50 @@
+ 	return lttpr_count;
+ }
+ 
++
++/* A14 diagnostic: recover only a positively identified stale LTTPR mode. */
++static int a14_dp_read_caps_recover(struct msm_dp_display_private *dp, u8 *dpcd)
++{
++	struct device *dev = &dp->msm_dp_display.pdev->dev;
++	u8 caps[DP_LTTPR_COMMON_CAP_SIZE] = { 0 };
++	unsigned int base = DP_LT_TUNABLE_PHY_REPEATER_FIELD_DATA_STRUCTURE_REV;
++	int original, ret, count;
++	u8 mode;
++
++	original = drm_dp_read_dpcd_caps(dp->aux, dpcd);
++	if (!original || dp->msm_dp_display.is_edp ||
++	    strcmp(dev_name(dev), "af54000.displayport-controller"))
++		return original;
++
++	dev_info(dev, "A14-LTTPR: initial caps failed=%d; reading repeater caps\n",
++		 original);
++	ret = drm_dp_dpcd_read_data(dp->aux, base, caps, sizeof(caps));
++	if (ret < 0) {
++		dev_info(dev, "A14-LTTPR: repeater read failed=%d; no mode write\n", ret);
++		return original;
++	}
++
++	count = drm_dp_lttpr_count(caps);
++	mode = caps[DP_PHY_REPEATER_MODE -
++		    DP_LT_TUNABLE_PHY_REPEATER_FIELD_DATA_STRUCTURE_REV];
++	dev_info(dev, "A14-LTTPR: caps=%*ph count=%d mode=%#x\n",
++		 (int)sizeof(caps), caps, count, mode);
++	if (caps[0] < 0x14 || count < 1 || count > 8 ||
++	    mode != DP_PHY_REPEATER_MODE_NON_TRANSPARENT) {
++		dev_info(dev, "A14-LTTPR: recovery conditions not met; no mode write\n");
++		return original;
++	}
++
++	ret = drm_dp_lttpr_set_transparent_mode(dp->aux, true);
++	dev_info(dev, "A14-LTTPR: set transparent result=%d\n", ret);
++	if (ret)
++		return original;
++
++	ret = drm_dp_read_dpcd_caps(dp->aux, dpcd);
++	dev_info(dev, "A14-LTTPR: capability retry result=%d\n", ret);
++	return ret;
++}
++
+ static int msm_dp_display_process_hpd_high(struct msm_dp_display_private *dp)
+ {
+ 	struct drm_connector *connector = dp->msm_dp_display.connector;
+@@ -279,7 +324,7 @@
+ 	int rc = 0;
+ 	u8 dpcd[DP_RECEIVER_CAP_SIZE];
+ 
+-	rc = drm_dp_read_dpcd_caps(dp->aux, dpcd);
++	rc = a14_dp_read_caps_recover(dp, dpcd);
+ 	if (rc)
+ 		goto end;
+ 

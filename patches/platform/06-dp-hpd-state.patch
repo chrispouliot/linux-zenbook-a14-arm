@@ -1,0 +1,64 @@
+Subject: [A14 platform 06/18] dp hpd state
+
+Extracted mechanically from Python rewrite 6 in the tested postPatch recipe.
+No resulting source changes; existing diagnostics and workarounds are retained.
+Apply in the order in kernel/a14-post-patch.nix, after its DT appends.
+The existing bank0 patch remains between platform patches 09 and 10.
+
+diff --git a/drivers/gpu/drm/msm/dp/dp_display.c b/drivers/gpu/drm/msm/dp/dp_display.c
+--- a/drivers/gpu/drm/msm/dp/dp_display.c
++++ b/drivers/gpu/drm/msm/dp/dp_display.c
+@@ -400,6 +400,10 @@
+ 
+ 	guard(mutex)(&dp->plugged_lock);
+ 
++	/* A14: repeated HPD-high pulses do not describe a new sink. */
++	if (dp->plugged)
++		return 0;
++
+ 	ret = pm_runtime_resume_and_get(&pdev->dev);
+ 	if (ret) {
+ 		DRM_ERROR("failed to pm_runtime_resume\n");
+@@ -416,7 +420,13 @@
+ 			dp->msm_dp_display.connector_type,
+ 			dp->link->sink_count);
+ 
+-	dp->plugged = true;
++	if (!ret) {
++		dp->plugged = true;
++	} else {
++		msm_dp_aux_enable_xfers(dp->aux, false);
++		msm_dp_display_host_phy_exit(dp);
++		pm_runtime_put_sync(&pdev->dev);
++	}
+ 
+ 	return ret;
+ };
+@@ -837,6 +847,11 @@
+ 	priv = container_of(dp, struct msm_dp_display_private, msm_dp_display);
+ 
+ 	guard(mutex)(&priv->plugged_lock);
++
++	/* A14: HPD handling already validated the connected sink. */
++	if (priv->plugged)
++		return connector_status_connected;
++
+ 	ret = pm_runtime_resume_and_get(&dp->pdev->dev);
+ 	if (ret) {
+ 		DRM_ERROR("failed to pm_runtime_resume\n");
+@@ -1213,10 +1228,12 @@
+ 
+ 	disable_irq(dp->irq);
+ 
+-	if (dp->msm_dp_display.is_edp) {
+-		msm_dp_display_host_phy_exit(dp);
++	/* A14: force a real external-DP PHY init after system sleep. */
++	msm_dp_display_host_phy_exit(dp);
++
++	if (dp->msm_dp_display.is_edp)
+ 		msm_dp_aux_hpd_disable(dp->aux);
+-	}
++
+ 	msm_dp_display_host_deinit(dp);
+ 
+ 	return 0;

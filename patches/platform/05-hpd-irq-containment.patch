@@ -1,0 +1,34 @@
+Subject: [A14 platform 05/18] hpd irq containment
+
+Extracted mechanically from Python rewrite 5 in the tested postPatch recipe.
+No resulting source changes; existing diagnostics and workarounds are retained.
+Apply in the order in kernel/a14-post-patch.nix, after its DT appends.
+The existing bank0 patch remains between platform patches 09 and 10.
+
+diff --git a/drivers/soc/qcom/pmic_glink_altmode.c b/drivers/soc/qcom/pmic_glink_altmode.c
+--- a/drivers/soc/qcom/pmic_glink_altmode.c
++++ b/drivers/soc/qcom/pmic_glink_altmode.c
+@@ -365,6 +365,23 @@
+ 	typec_switch_set(alt_port->typec_switch, alt_port->orientation);
+ 
+ 	/*
++	 * ASUS A14 diagnostic workaround: this kernel cannot pass IRQ_HPD
++	 * separately from a real connector hotplug. Suppress IRQ-only
++	 * notifications on the observed external-DP port while preserving
++	 * HPD-high plug and HPD-low unplug notifications.
++	 */
++	if (alt_port->index == 1 &&
++	    alt_port->svid == USB_TYPEC_DP_SID &&
++	    alt_port->hpd_state &&
++	    alt_port->hpd_irq) {
++		dev_info_ratelimited(altmode->dev,
++			"A14-DP: suppressing port 1 IRQ-only HPD notification\n");
++		pmic_glink_altmode_request(altmode, ALTMODE_PAN_ACK,
++					    alt_port->index);
++		return;
++	}
++
++	/*
+ 	 * MUX_CTRL_STATE_DP4LN/USB3_DP may only be set if SVID=DP, but we need
+ 	 * to special-case the SVID=DP && mux_ctrl=NO_CONN case to deliver a
+ 	 * HPD notification

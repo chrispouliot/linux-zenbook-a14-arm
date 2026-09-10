@@ -1532,7 +1532,7 @@ You have already completed the ISO-building and USB-writing steps. The same USB 
 
 ## Included patches
 
-These are the project's additions to the pinned Glymur kernel, including device-tree and audio files and the platform transformations in `kernel/a14-post-patch.nix`. Some display workarounds remain experimental. The four display patches form an ordered series and are not independent opt-in features; see [display integration and validation](docs/display/README.md). The SCMI mailbox patch and fixed-address ramoops diagnostics are **opt-in**; other retained DP diagnostics remain part of the baseline.
+These are the project's additions to the pinned Glymur kernel, including device-tree and audio files and the ordered platform patches under `patches/platform/`. Some display workarounds remain experimental. The older Python rewrites are now [eighteen platform patches](docs/display/PLATFORM.md), with the same resulting source. The four display patches form an ordered series and are not independent opt-in features; see [display integration and validation](docs/display/README.md). The SCMI mailbox patch and fixed-address ramoops diagnostics are **opt-in**; other retained DP diagnostics remain part of the baseline.
 
 <details>
 <summary><strong>Show all patches and hardware adjustments</strong></summary>
@@ -1554,21 +1554,26 @@ These are the project's additions to the pinned Glymur kernel, including device-
 | [`a14-display-edp-depth.patch`](patches/a14-display-edp-depth.patch) | Finalizes the native internal panel's colour depth after powered capability setup, preserving its HBR link cap. |
 | [Legacy dock recovery v4](display/options/dock-recovery-v4.nix) — optional | Overrides the personal v3 boot service only if its existing option is enabled. Currently disabled in the tested personal configuration; a docked boot passed without it and without the 30-second grace period. |
 | [`a14-scmi-mailbox-set-test.patch`](patches/a14-scmi-mailbox-set-test.patch) — opt-in | Tests CPU performance requests through SCMI mailbox messages instead of fast-channel writes. It is not a proven performance fix. |
-| [External DP1 link limit](kernel/a14-post-patch.nix) | Caps the second external controller (`mdss_dp1`, af5c000) at HBR2 / 5.4 Gbit/s per lane. The working port-one dock path uses af54000 and can negotiate HBR3. |
-| [Stereo speaker backend](kernel/a14-post-patch.nix) | Restricts the WSA backend to two channels while retaining the existing four-channel audio frontend. |
-| [Keyboard Fn-lock support](kernel/a14-post-patch.nix) | Enables Fn-lock for the Zenbook keyboard, with media/brightness keys used directly and Fn for F1–F12. |
-| [PMIC GLINK event logging](kernel/a14-post-patch.nix) | Logs received and processed USB-C/display events to diagnose ordering and combined notifications. |
-| [Display hotplug interrupt containment](kernel/a14-post-patch.nix) | Suppresses repeated IRQ-only notifications on the affected external port while retaining real plug/unplug events. |
-| [Display connection and resume handling](kernel/a14-post-patch.nix) | Avoids duplicate display discovery, cleans up failed connections, and forces external DP PHY reinitialization after suspend. |
-| [DisplayPort bandwidth calculation](kernel/a14-post-patch.nix) | Checks modes against actual physical-link capacity instead of treating the internal wide-bus optimization as extra bandwidth. |
-| [AUX wrong-data-count handling](kernel/a14-post-patch.nix) | Completes malformed AUX transfers with an error so DRM can retry promptly instead of waiting for a timeout. |
-| [Glymur PHY programming corrections](kernel/a14-post-patch.nix) | Uses orientation-aware DP programming and preserves the required AUX configuration value during PHY startup. |
-| [PHY startup diagnostics](kernel/a14-post-patch.nix) | Adds register and timeout diagnostics, including an extended 50 ms C_READY wait for investigating startup failures. |
-| [PHY and link-clock error handling](kernel/a14-post-patch.nix) | Propagates startup failures and unwinds PHY power when a later stage fails, reducing invalid teardown sequences. |
-| [USB-C power-domain retention](kernel/a14-post-patch.nix) | Keeps both USB-C controller and combo-PHY power domains on across suspend to avoid controller faults and stalled display resume. |
-| [Retained display disconnect events](kernel/a14-post-patch.nix) | Preserves a pending disconnect before the latest reconnect state, using stable worker snapshots and matching bridge replay. |
-| [SAFE-detach workaround](kernel/a14-post-patch.nix) — experimental | Defers shared-PHY reinitialization during a USB-C SAFE notification, leaving normal USB/DP teardown to release it. |
-| [Live display check before link enable](kernel/a14-post-patch.nix) — experimental | Checks that an external display still responds over AUX before restoring its link, and cleans up if it has disappeared. |
+| [External DP1 link limit](patches/platform/01-external-dp-hbr2.patch) | Caps the second external controller (`mdss_dp1`, af5c000) at HBR2 / 5.4 Gbit/s per lane. The working port-one dock path uses af54000 and can negotiate HBR3. |
+| [Stereo speaker backend](patches/platform/02-audio-stereo.patch) | Restricts the WSA backend to two channels while retaining the existing four-channel audio frontend. |
+| [Keyboard Fn-lock support](patches/platform/03-hid-fn-lock.patch) | Enables Fn-lock for the Zenbook keyboard, with media/brightness keys used directly and Fn for F1–F12. |
+| [PMIC GLINK event logging](patches/platform/04-glink-diagnostics.patch) | Logs received and processed USB-C/display events to diagnose ordering and combined notifications. |
+| [Display hotplug interrupt containment](patches/platform/05-hpd-irq-containment.patch) | Suppresses repeated IRQ-only notifications on the affected external port while retaining real plug/unplug events. |
+| [Display connection and resume handling](patches/platform/06-dp-hpd-state.patch) | Avoids duplicate display discovery, cleans up failed connections, and forces external DP PHY reinitialization after suspend. |
+| [DisplayPort bandwidth calculation](patches/platform/07-dp-link-bandwidth.patch) | Checks modes against actual physical-link capacity instead of treating the internal wide-bus optimization as extra bandwidth. |
+| [AUX wrong-data-count handling](patches/platform/08-aux-wrong-data-count.patch) | Completes malformed AUX transfers with an error so DRM can retry promptly instead of waiting for a timeout. |
+| [Glymur PHY programming corrections](patches/platform/09-phy-startup.patch) | Uses orientation-aware DP programming and preserves the required AUX configuration value during PHY startup. |
+| [PHY startup diagnostics](patches/platform/09-phy-startup.patch) | Adds register and timeout diagnostics, including an extended 50 ms C_READY wait for investigating startup failures. |
+| [PHY and link-clock error handling](patches/platform/09-phy-startup.patch) | Propagates startup failures and unwinds PHY power when a later stage fails, reducing invalid teardown sequences. |
+| [USB-C power-domain retention](patches/platform/10-usb-domain-retention.patch) | Keeps both USB-C controller and combo-PHY power domains on across suspend to avoid controller faults and stalled display resume. |
+| [Retained display disconnect events](patches/platform/11-hpd-disconnect-retention.patch) | Preserves a pending disconnect before the latest reconnect state, using stable worker snapshots and matching bridge replay. |
+| [SAFE-detach workaround](patches/platform/12-phy-safe-detach.patch) — experimental | Defers shared-PHY reinitialization during a USB-C SAFE notification, leaving normal USB/DP teardown to release it. |
+| [Live display check before link enable](patches/platform/13-dp-live-sink-check.patch) — experimental | Checks that an external display still responds over AUX before restoring its link, and cleans up if it has disappeared. |
+| [`14-hpd-bootstrap.patch`](patches/platform/14-hpd-bootstrap.patch) | Preserves initial IRQ-tagged HPD during DP setup. |
+| [`15-usb-dp-lifecycle.patch`](patches/platform/15-usb-dp-lifecycle.patch) | Retains the USB/DP lifecycle correction for the shared PHY. |
+| [`16-phy-boot-mode.patch`](patches/platform/16-phy-boot-mode.patch) | Retains the experimental dock boot-mode programming behavior. |
+| [`17-dpcd-probe.patch`](patches/platform/17-dpcd-probe.patch) | Retains the preliminary DPCD-probe override on af54000. |
+| [`18-repeater-caps-recovery.patch`](patches/platform/18-repeater-caps-recovery.patch) | Retains the guarded repeater-capability recovery helper before the later display patches. |
 | [Audio UCM and speaker routing](modules/audio.nix) | Removes nonexistent speaker paths, maps stereo audio to the populated channels, and provides configurable speaker gain. |
 | [HDMI audio hotplug helper](modules/audio.nix) | Creates an HDMI output only while connected, keeping disconnected HDMI from breaking internal audio discovery. |
 | [USB and audio autosuspend rules](modules/default.nix) | Keeps the affected SoundWire device and selected VIA USB hubs awake to avoid wake/reconnect problems. |

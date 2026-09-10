@@ -1,0 +1,37 @@
+Subject: [A14 platform 07/18] dp link bandwidth
+
+Extracted mechanically from Python rewrite 7 in the tested postPatch recipe.
+No resulting source changes; existing diagnostics and workarounds are retained.
+Apply in the order in kernel/a14-post-patch.nix, after its DT appends.
+The existing bank0 patch remains between platform patches 09 and 10.
+
+diff --git a/drivers/gpu/drm/msm/dp/dp_display.c b/drivers/gpu/drm/msm/dp/dp_display.c
+--- a/drivers/gpu/drm/msm/dp/dp_display.c
++++ b/drivers/gpu/drm/msm/dp/dp_display.c
+@@ -719,9 +719,8 @@
+ 	msm_dp_display = container_of(dp, struct msm_dp_display_private, msm_dp_display);
+ 	link_info = &msm_dp_display->panel->link_info;
+ 
+-	if ((drm_mode_is_420_only(&dp->connector->display_info, mode) &&
+-	     msm_dp_display->panel->vsc_sdp_supported) ||
+-	     msm_dp_wide_bus_available(dp))
++	if (drm_mode_is_420_only(&dp->connector->display_info, mode) &&
++	    msm_dp_display->panel->vsc_sdp_supported)
+ 		mode_pclk_khz /= 2;
+ 
+ 	if (mode_pclk_khz > DP_MAX_PIXEL_CLK_KHZ)
+@@ -737,8 +736,13 @@
+ 	mode_rate_khz = mode_pclk_khz * mode_bpp;
+ 	supported_rate_khz = link_info->num_lanes * link_info->rate * 8;
+ 
+-	if (mode_rate_khz > supported_rate_khz)
++	if (mode_rate_khz > supported_rate_khz) {
++		drm_dbg_dp(dp->drm_dev,
++			   "A14-DP: rejecting %s: payload=%u capacity=%u kbit/s bpp=%u\n",
++			   mode->name, mode_rate_khz, supported_rate_khz,
++			   mode_bpp);
+ 		return MODE_BAD;
++	}
+ 
+ 	return MODE_OK;
+ }

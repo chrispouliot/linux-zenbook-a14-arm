@@ -1,0 +1,131 @@
+Subject: [A14 platform 13/18] dp live sink check
+
+Extracted mechanically from Python rewrite 13 in the tested postPatch recipe.
+No resulting source changes; existing diagnostics and workarounds are retained.
+Apply in the order in kernel/a14-post-patch.nix, after its DT appends.
+The existing bank0 patch remains between platform patches 09 and 10.
+
+diff --git a/drivers/gpu/drm/msm/dp/dp_display.c b/drivers/gpu/drm/msm/dp/dp_display.c
+--- a/drivers/gpu/drm/msm/dp/dp_display.c
++++ b/drivers/gpu/drm/msm/dp/dp_display.c
+@@ -32,6 +32,12 @@
+ module_param(psr_enabled, bool, 0);
+ MODULE_PARM_DESC(psr_enabled, "enable PSR for eDP and DP displays");
+ 
++/* Diagnostic: validate the external sink before programming the main link. */
++static bool a14_check_sink_before_link = true;
++module_param(a14_check_sink_before_link, bool, 0644);
++MODULE_PARM_DESC(a14_check_sink_before_link,
++                "A14 test: require a live AUX sink before external DP link enable");
++
+ #define HPD_STRING_SIZE 30
+ 
+ enum {
+@@ -52,6 +58,9 @@
+ 	bool core_initialized;
+ 	bool phy_initialized;
+ 	bool audio_supported;
++
++	/* An AUX preflight failure already released the enable PM reference. */
++	bool a14_enable_aborted;
+ 
+ 	struct mutex plugged_lock;
+ 	bool plugged;
+@@ -1373,6 +1382,37 @@
+ 	return 0;
+ }
+ 
++/*
++ * Called with the controller resumed and the AUX PHY initialized, before
++ * msm_dp_ctrl_on_link() powers/configures the main-link PHY and clocks.
++ * A retained HPD disconnect may still be on a frozen GLINK workqueue when
++ * KMS restores its saved state. Cached plugged/sink_count cannot prove that
++ * the dock is still present here. This is a diagnostic, not HPD replacement.
++ */
++static int msm_dp_a14_check_sink(struct msm_dp_display_private *priv)
++{
++	struct msm_dp *dp = &priv->msm_dp_display;
++	u8 revision = 0;
++	int ret;
++
++	dev_info(&dp->pdev->dev,
++		 "A14-DP: sink check begin plugged=%u sinks=%u core=%u phy=%u\n",
++		 priv->plugged, priv->link->sink_count,
++		 priv->core_initialized, priv->phy_initialized);
++
++	/* Do not override AUX transfer gating installed by HPD disconnect. */
++	ret = drm_dp_dpcd_readb(priv->aux, DP_DPCD_REV, &revision);
++	dev_info(&dp->pdev->dev,
++		 "A14-DP: sink check result ret=%d revision=%#x\n",
++		 ret, revision);
++	if (ret != 1)
++		return ret < 0 ? ret : -EIO;
++	if (!revision || revision == 0xff)
++		return -EIO;
++
++	return 0;
++}
++
+ void msm_dp_bridge_atomic_enable(struct drm_bridge *drm_bridge,
+ 				 struct drm_atomic_commit *state)
+ {
+@@ -1381,8 +1421,10 @@
+ 	int rc = 0;
+ 	struct msm_dp_display_private *msm_dp_display;
+ 	bool force_link_train = false;
++	bool aux_initialized_here = false;
+ 
+ 	msm_dp_display = container_of(dp, struct msm_dp_display_private, msm_dp_display);
++	msm_dp_display->a14_enable_aborted = false;
+ 	if (!msm_dp_display->msm_dp_mode.drm_mode.clock) {
+ 		DRM_ERROR("invalid params\n");
+ 		return;
+@@ -1406,8 +1448,24 @@
+ 	}
+ 
+ 	if (!dp->power_on) {
+-		msm_dp_display_host_phy_init(msm_dp_display);
++		aux_initialized_here = msm_dp_display_host_phy_init(msm_dp_display);
+ 		force_link_train = true;
++	}
++
++	if (!dp->is_edp && !dp->power_on &&
++	    of_device_is_compatible(dp->pdev->dev.of_node, "qcom,glymur-dp") &&
++	    READ_ONCE(a14_check_sink_before_link)) {
++		rc = msm_dp_a14_check_sink(msm_dp_display);
++		if (rc) {
++			dev_warn(&dp->pdev->dev,
++				 "A14-DP: link enable skipped after sink check rc=%d\n", rc);
++			/* Balance only the resources acquired by this enable. */
++			if (aux_initialized_here)
++				msm_dp_display_host_phy_exit(msm_dp_display);
++			msm_dp_display->a14_enable_aborted = true;
++			pm_runtime_put_sync(&dp->pdev->dev);
++			return;
++		}
+ 	}
+ 
+ 	rc = msm_dp_ctrl_on_link(msm_dp_display->ctrl);
+@@ -1437,6 +1495,10 @@
+ 
+ 	msm_dp_display = container_of(dp, struct msm_dp_display_private, msm_dp_display);
+ 
++	/* No main link was started, and the enable PM reference is gone. */
++	if (msm_dp_display->a14_enable_aborted)
++		return;
++
+ 	msm_dp_ctrl_push_idle(msm_dp_display->ctrl);
+ }
+ 
+@@ -1448,6 +1510,11 @@
+ 	struct msm_dp_display_private *msm_dp_display;
+ 
+ 	msm_dp_display = container_of(dp, struct msm_dp_display_private, msm_dp_display);
++
++	if (msm_dp_display->a14_enable_aborted) {
++		msm_dp_display->a14_enable_aborted = false;
++		return;
++	}
+ 
+ 	if (dp->is_edp)
+ 		msm_dp_hpd_unplug_handle(msm_dp_display);

@@ -1,0 +1,34 @@
+Subject: [A14 platform 17/18] dpcd probe
+
+Extracted mechanically from Python rewrite 17 in the tested postPatch recipe.
+No resulting source changes; existing diagnostics and workarounds are retained.
+Apply in the order in kernel/a14-post-patch.nix, after its DT appends.
+The existing bank0 patch remains between platform patches 09 and 10.
+
+diff --git a/drivers/gpu/drm/msm/dp/dp_aux.c b/drivers/gpu/drm/msm/dp/dp_aux.c
+--- a/drivers/gpu/drm/msm/dp/dp_aux.c
++++ b/drivers/gpu/drm/msm/dp/dp_aux.c
+@@ -6,6 +6,8 @@
+ #include <linux/delay.h>
+ #include <linux/iopoll.h>
+ #include <linux/phy/phy.h>
++#include <linux/string.h>
++#include <drm/display/drm_dp_helper.h>
+ #include <drm/drm_print.h>
+ 
+ #include "dp_reg.h"
+@@ -719,6 +721,14 @@
+ 	aux->msm_dp_aux.wait_hpd_asserted = msm_dp_wait_hpd_asserted;
+ 	drm_dp_aux_init(&aux->msm_dp_aux);
+ 
++	/* A14 diagnostic: test real DPCD reads without the preliminary read. */
++	if (!is_edp &&
++	    !strcmp(dev_name(dev), "af54000.displayport-controller")) {
++		drm_dp_dpcd_set_probe(&aux->msm_dp_aux, false);
++		dev_info(dev,
++			 "A14-AUX-PROBE: preliminary DPCD read disabled on dock controller\n");
++	}
++
+ 	return &aux->msm_dp_aux;
+ }
+ 

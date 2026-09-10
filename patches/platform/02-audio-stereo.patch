@@ -1,0 +1,27 @@
+Subject: [A14 platform 02/18] audio stereo
+
+Extracted mechanically from Python rewrite 2 in the tested postPatch recipe.
+No resulting source changes; existing diagnostics and workarounds are retained.
+Apply in the order in kernel/a14-post-patch.nix, after its DT appends.
+The existing bank0 patch remains between platform patches 09 and 10.
+
+diff --git a/sound/soc/qcom/x1e80100.c b/sound/soc/qcom/x1e80100.c
+--- a/sound/soc/qcom/x1e80100.c
++++ b/sound/soc/qcom/x1e80100.c
+@@ -79,6 +79,16 @@
+ 
+ 	rate->min = rate->max = 48000;
+ 	switch (cpu_dai->id) {
++	case WSA_CODEC_DMA_RX_0:
++	case WSA_CODEC_DMA_RX_1:
++		/*
++		 * ASUS UX3407NA diagnostic:
++		 * only the left WSA SoundWire bus is present in the
++		 * sound-card DAI link, so constrain this backend to stereo.
++		 */
++		channels->min = channels->max = 2;
++		break;
++
+ 	case TX_CODEC_DMA_TX_0:
+ 	case TX_CODEC_DMA_TX_1:
+ 	case TX_CODEC_DMA_TX_2:

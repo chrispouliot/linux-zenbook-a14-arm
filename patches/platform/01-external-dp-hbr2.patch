@@ -1,0 +1,21 @@
+Subject: [A14 platform 01/18] external dp hbr2
+
+Extracted mechanically from Python rewrite 1 in the tested postPatch recipe.
+No resulting source changes; existing diagnostics and workarounds are retained.
+Apply in the order in kernel/a14-post-patch.nix, after its DT appends.
+The existing bank0 patch remains between platform patches 09 and 10.
+
+diff --git a/arch/arm64/boot/dts/qcom/glymur-asus-zenbook-a14-ux3407na.dts b/arch/arm64/boot/dts/qcom/glymur-asus-zenbook-a14-ux3407na.dts
+--- a/arch/arm64/boot/dts/qcom/glymur-asus-zenbook-a14-ux3407na.dts
++++ b/arch/arm64/boot/dts/qcom/glymur-asus-zenbook-a14-ux3407na.dts
+@@ -1262,3 +1262,10 @@
+ 	/delete-property/ link-frequencies;
+ 	link-frequencies = /bits/ 64 <1620000000 2700000000>;
+ };
++
++
++/* ASUS A14 external DP1 HBR diagnostic limit */
++&mdss_dp1_out {
++	/delete-property/ link-frequencies;
++	link-frequencies = /bits/ 64 <1620000000 2700000000 5400000000>;
++};

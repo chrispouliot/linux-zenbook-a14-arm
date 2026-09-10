@@ -1,0 +1,46 @@
+Subject: [A14 platform 03/18] hid fn lock
+
+Extracted mechanically from Python rewrite 3 in the tested postPatch recipe.
+No resulting source changes; existing diagnostics and workarounds are retained.
+Apply in the order in kernel/a14-post-patch.nix, after its DT appends.
+The existing bank0 patch remains between platform patches 09 and 10.
+
+diff --git a/drivers/hid/hid-asus.c b/drivers/hid/hid-asus.c
+--- a/drivers/hid/hid-asus.c
++++ b/drivers/hid/hid-asus.c
+@@ -978,9 +978,10 @@
+ 	}
+ 
+ 	if (drvdata->quirks & QUIRK_HID_FN_LOCK) {
+-		drvdata->fn_lock = true;
++		drvdata->fn_lock =
++			hdev->product != USB_DEVICE_ID_ASUSTEK_I2C_ZENBOOK_KEYBOARD;
+ 		INIT_WORK(&drvdata->fn_lock_sync_work, asus_sync_fn_lock);
+-		asus_kbd_set_fn_lock(hdev, true);
++		asus_kbd_set_fn_lock(hdev, drvdata->fn_lock);
+ 	}
+ 
+ 	if (drvdata->tp) {
+@@ -1017,9 +1018,10 @@
+ 	drvdata->input = input;
+ 
+ 	if (drvdata->quirks & QUIRK_HID_FN_LOCK) {
+-		drvdata->fn_lock = true;
++		drvdata->fn_lock =
++			hdev->product != USB_DEVICE_ID_ASUSTEK_I2C_ZENBOOK_KEYBOARD;
+ 		INIT_WORK(&drvdata->fn_lock_sync_work, asus_sync_fn_lock);
+-		asus_kbd_set_fn_lock(hdev, true);
++		asus_kbd_set_fn_lock(hdev, drvdata->fn_lock);
+ 	}
+ 
+ 	return 0;
+@@ -1500,7 +1502,8 @@
+ 		USB_DEVICE_ID_ASUSTEK_I2C_KEYBOARD), I2C_KEYBOARD_QUIRKS},
+ 	{ HID_I2C_DEVICE(USB_VENDOR_ID_ASUSTEK,
+ 		USB_DEVICE_ID_ASUSTEK_I2C_ZENBOOK_KEYBOARD),
+-	  I2C_KEYBOARD_QUIRKS | QUIRK_FILTER_CAMERA_COMPANION },
++	  I2C_KEYBOARD_QUIRKS | QUIRK_FILTER_CAMERA_COMPANION |
++	  QUIRK_HID_FN_LOCK },
+ 	{ HID_I2C_DEVICE(USB_VENDOR_ID_ASUSTEK,
+ 		USB_DEVICE_ID_ASUSTEK_I2C_TOUCHPAD), I2C_TOUCHPAD_QUIRKS },
+ 	{ HID_USB_DEVICE(USB_VENDOR_ID_ASUSTEK,

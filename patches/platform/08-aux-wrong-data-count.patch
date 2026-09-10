@@ -1,0 +1,39 @@
+Subject: [A14 platform 08/18] aux wrong data count
+
+Extracted mechanically from Python rewrite 8 in the tested postPatch recipe.
+No resulting source changes; existing diagnostics and workarounds are retained.
+Apply in the order in kernel/a14-post-patch.nix, after its DT appends.
+The existing bank0 patch remains between platform patches 09 and 10.
+
+diff --git a/drivers/gpu/drm/msm/dp/dp_aux.c b/drivers/gpu/drm/msm/dp/dp_aux.c
+--- a/drivers/gpu/drm/msm/dp/dp_aux.c
++++ b/drivers/gpu/drm/msm/dp/dp_aux.c
+@@ -19,6 +19,7 @@
+ 	DP_AUX_ERR_DEFER,
+ 	DP_AUX_ERR_NACK_DEFER,
+ 	DP_AUX_ERR_PHY,
++	DP_AUX_ERR_DATA,
+ };
+ 
+ struct msm_dp_aux_private {
+@@ -434,6 +435,11 @@
+ 		case DP_AUX_ERR_TOUT:
+ 			ret = -ETIMEDOUT;
+ 			break;
++		case DP_AUX_ERR_DATA:
++			DRM_ERROR("A14-DP: AUX wrong data count addr=%#x request=%#x size=%zu\n",
++				  msg->address, msg->request, msg->size);
++			ret = -EPROTO;
++			break;
+ 		}
+ 	}
+ 
+@@ -478,6 +484,8 @@
+ 		aux->aux_error_num = DP_AUX_ERR_NACK_DEFER;
+ 	} else if (isr & DP_INTR_WRONG_ADDR) {
+ 		aux->aux_error_num = DP_AUX_ERR_ADDR;
++	} else if (isr & DP_INTR_WRONG_DATA_CNT) {
++		aux->aux_error_num = DP_AUX_ERR_DATA;
+ 	} else if (isr & DP_INTR_TIMEOUT) {
+ 		aux->aux_error_num = DP_AUX_ERR_TOUT;
+ 	} else if (!aux->native && (isr & DP_INTR_I2C_NACK)) {

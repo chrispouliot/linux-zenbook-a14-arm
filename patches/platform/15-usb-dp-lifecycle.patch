@@ -1,0 +1,85 @@
+Subject: [A14 platform 15/18] usb dp lifecycle
+
+Extracted mechanically from Python rewrite 15 in the tested postPatch recipe.
+No resulting source changes; existing diagnostics and workarounds are retained.
+Apply in the order in kernel/a14-post-patch.nix, after its DT appends.
+The existing bank0 patch remains between platform patches 09 and 10.
+
+diff --git a/drivers/phy/qualcomm/phy-qcom-qmp-combo.c b/drivers/phy/qualcomm/phy-qcom-qmp-combo.c
+--- a/drivers/phy/qualcomm/phy-qcom-qmp-combo.c
++++ b/drivers/phy/qualcomm/phy-qcom-qmp-combo.c
+@@ -4106,6 +4106,13 @@
+ 	unsigned int val;
+ 	int ret;
+ 
++	if (cfg == &glymur_usb3dpphy_cfg &&
++	    qmp->qmpphy_mode == QMPPHY_MODE_DP_ONLY) {
++		dev_info(qmp->dev,
++			 "A14-DP: USB3 startup skipped in DP-only mode; common reference retained\n");
++		return 0;
++	}
++
+ 	qmp_configure(qmp->dev, serdes, cfg->serdes_tbl, cfg->serdes_tbl_num);
+ 
+ 	/* Tx, Rx, and PCS configurations */
+@@ -4143,7 +4150,9 @@
+ 	return 0;
+ 
+ err_disable_pipe_clk:
+-	clk_disable_unprepare(qmp->pipe_clk);
++	/* Glymur: leave common-clock ownership with com_init/com_exit. */
++	if (cfg != &glymur_usb3dpphy_cfg)
++		clk_disable_unprepare(qmp->pipe_clk);
+ 
+ 	return ret;
+ }
+@@ -4152,6 +4161,13 @@
+ {
+ 	struct qmp_combo *qmp = phy_get_drvdata(phy);
+ 	const struct qmp_phy_cfg *cfg = qmp->cfg;
++
++	if (cfg == &glymur_usb3dpphy_cfg &&
++	    qmp->qmpphy_mode == QMPPHY_MODE_DP_ONLY) {
++		dev_info(qmp->dev,
++			 "A14-DP: USB3 stop skipped in DP-only mode; consumer exit remains balanced\n");
++		return 0;
++	}
+ 
+ 	/* PHY reset */
+ 	qphy_setbits(qmp->pcs, cfg->regs[QPHY_SW_RESET], SW_RESET);
+@@ -4810,15 +4826,26 @@
+ 		/* Now everything's powered down, power up the right PHYs */
+ 		qmp_combo_com_init(qmp, true);
+ 
+-		if (new_mode == QMPPHY_MODE_DP_ONLY) {
+-			if (qmp->usb_init_count)
+-				qmp->usb_init_count--;
+-		}
+-
+-		if (new_mode == QMPPHY_MODE_USB3DP || new_mode == QMPPHY_MODE_USB3_ONLY) {
+-			qmp_combo_usb_power_on(qmp->usb_phy);
+-			if (!qmp->usb_init_count)
+-				qmp->usb_init_count++;
++		if (cfg == &glymur_usb3dpphy_cfg) {
++			/* Lane routing does not acquire/release USB client references. */
++			if (qmp->usb_init_count &&
++			    new_mode != QMPPHY_MODE_DP_ONLY)
++				qmp_combo_usb_power_on(qmp->usb_phy);
++			dev_info(qmp->dev,
++				 "A14-DP: mux preserves USB refs init=%d usb_init=%u dp_init=%u mode=%u\n",
++				 qmp->init_count, qmp->usb_init_count,
++				 qmp->dp_init_count, new_mode);
++		} else {
++			if (new_mode == QMPPHY_MODE_DP_ONLY) {
++				if (qmp->usb_init_count)
++					qmp->usb_init_count--;
++			}
++
++			if (new_mode == QMPPHY_MODE_USB3DP || new_mode == QMPPHY_MODE_USB3_ONLY) {
++				qmp_combo_usb_power_on(qmp->usb_phy);
++				if (!qmp->usb_init_count)
++					qmp->usb_init_count++;
++			}
+ 		}
+ 
+ 		if (new_mode == QMPPHY_MODE_DP_ONLY || new_mode == QMPPHY_MODE_USB3DP) {

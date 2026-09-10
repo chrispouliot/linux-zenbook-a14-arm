@@ -1,0 +1,32 @@
+Subject: [A14 platform 16/18] phy boot mode
+
+Extracted mechanically from Python rewrite 16 in the tested postPatch recipe.
+No resulting source changes; existing diagnostics and workarounds are retained.
+Apply in the order in kernel/a14-post-patch.nix, after its DT appends.
+The existing bank0 patch remains between platform patches 09 and 10.
+
+diff --git a/drivers/phy/qualcomm/phy-qcom-qmp-combo.c b/drivers/phy/qualcomm/phy-qcom-qmp-combo.c
+--- a/drivers/phy/qualcomm/phy-qcom-qmp-combo.c
++++ b/drivers/phy/qualcomm/phy-qcom-qmp-combo.c
+@@ -5234,6 +5234,21 @@
+ 
+ 	if (of_property_present(dev->of_node, "mode-switch") ||
+ 	    of_property_present(dev->of_node, "orientation-switch")) {
++		/*
++		 * A14 boot experiment: USB3DP is the default cached mode, so a
++		 * dock already attached at boot can request USB3DP without
++		 * exercising the mux reconfiguration used after reconnect.
++		 * Start switchable Glymur ports in USB-only mode and let the
++		 * negotiated DP request select the combined or DP-only mode.
++		 * Fixed-wired DP/eDP PHYs keep their data-lanes configuration.
++		 */
++		if (qmp->cfg == &glymur_usb3dpphy_cfg &&
++		    of_property_present(dev->of_node, "mode-switch")) {
++			qmp->qmpphy_mode = QMPPHY_MODE_USB3_ONLY;
++			dev_info(dev,
++				 "A14-BOOT: initial Type-C mode USB3_ONLY; waiting for negotiated DP mux\n");
++		}
++
+ 		ret = qmp_combo_typec_register(qmp);
+ 		if (ret)
+ 			goto err_node_put;

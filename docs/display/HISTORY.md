@@ -147,3 +147,19 @@ Remaining cleanup: extract older platform rewrites; test individual diagnostic
 removals; review/remove dormant code only with a deliberate source change; and
 separate A14 quirks from potential generic upstream fixes. None of those runtime
 changes is included in the series split.
+
+## Follow-up: platform rewrite extraction
+
+The owner reported successful boot, standby and suspend with the four-patch
+display series and personal recovery option disabled. The next packaging pass
+extracted all eighteen Python source rewrites into `patches/platform/`, retaining
+their original order and the bank0 patch between rewrites 09 and 10. The three
+DT appends and the separate build-time checks remain. Some obsolete shell
+comments were removed and HBR/stereo build messages corrected; the kernel source
+comments and diagnostic code themselves are unchanged.
+
+The original and new recipes both reproduce all 38 recorded source hashes.
+The postPatch expression shrank from 2,046 to 170 lines and no longer executes
+Python source rewrites. The verifier checks the platform series too. See
+`PLATFORM.md` for the extracted patch inventory. No new hardware result is
+claimed for this packaging pass until the owner rebuilds and tests it.

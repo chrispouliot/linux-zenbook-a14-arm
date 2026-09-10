@@ -49,6 +49,16 @@ def main():
     marker = '      # Display series: all four patches are required, in this order.\n'
     if body.count(marker) != 1:
         parser.error('Display series boundary missing or duplicated')
+    platform = json.loads((repo / 'docs/display/platform-series.json').read_text())
+    if platform['source_revision'] != rev:
+        parser.error('Platform and display series target different kernel revisions')
+    platform_order = re.findall(r'\$\{\.\./(patches/[^}]+\.patch)\}', body.split(marker)[0])
+    if platform_order != [entry['path'] for entry in platform['post_patch_order']]:
+        parser.error('Platform recipe order differs from its recorded series')
+    for entry in platform['post_patch_order']:
+        data = (repo / entry['path']).read_bytes()
+        if hashlib.sha256(data).hexdigest() != entry['sha256']:
+            parser.error('Platform patch differs from recorded series: ' + entry['path'])
     order = re.findall(r'\$\{\.\./(patches/[^}]+\.patch)\}', body.split(marker)[1])
     if order != [entry['path'] for entry in manifest['patches']]:
         parser.error('Recipe order does not match the recorded series')
@@ -97,7 +107,7 @@ def main():
     if mismatches or extras:
         raise SystemExit('Source comparison failed: ' + ', '.join(mismatches + extras))
     print(f'PASS: all {len(expected)} reconstructed source files match the tested baseline.')
-    print('PASS: four display patches applied in order without fuzz or offsets.')
+    print('PASS: platform and display patches applied in order without fuzz or offsets.')
     print('No NixOS evaluation, kernel compilation, or hardware test performed.')
     print('Reconstruction and hashes:', out)
 

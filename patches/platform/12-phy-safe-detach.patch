@@ -1,0 +1,99 @@
+Subject: [A14 platform 12/18] phy safe detach
+
+Extracted mechanically from Python rewrite 12 in the tested postPatch recipe.
+No resulting source changes; existing diagnostics and workarounds are retained.
+Apply in the order in kernel/a14-post-patch.nix, after its DT appends.
+The existing bank0 patch remains between platform patches 09 and 10.
+
+diff --git a/drivers/phy/qualcomm/phy-qcom-qmp-combo.c b/drivers/phy/qualcomm/phy-qcom-qmp-combo.c
+--- a/drivers/phy/qualcomm/phy-qcom-qmp-combo.c
++++ b/drivers/phy/qualcomm/phy-qcom-qmp-combo.c
+@@ -3975,11 +3975,21 @@
+ 	struct qmp_combo *qmp = phy_get_drvdata(phy);
+ 
+ 	mutex_lock(&qmp->phy_mutex);
++	if (qmp->cfg == &glymur_usb3dpphy_cfg)
++		dev_info(qmp->dev,
++			 "A14-DP: DP exit enter init=%d usb_init=%u dp_init=%u powered=%u qmp_mode=%u\n",
++			 qmp->init_count, qmp->usb_init_count, qmp->dp_init_count,
++			 qmp->dp_powered_on, qmp->qmpphy_mode);
+ 
+ 	qmp_combo_com_exit(qmp, false);
+ 
+ 	qmp->dp_init_count--;
+ 
++	if (qmp->cfg == &glymur_usb3dpphy_cfg)
++		dev_info(qmp->dev,
++			 "A14-DP: DP exit done init=%d usb_init=%u dp_init=%u powered=%u qmp_mode=%u\n",
++			 qmp->init_count, qmp->usb_init_count, qmp->dp_init_count,
++			 qmp->dp_powered_on, qmp->qmpphy_mode);
+ 	mutex_unlock(&qmp->phy_mutex);
+ 
+ 	return 0;
+@@ -4198,6 +4208,11 @@
+ 	int ret;
+ 
+ 	mutex_lock(&qmp->phy_mutex);
++	if (qmp->cfg == &glymur_usb3dpphy_cfg)
++		dev_info(qmp->dev,
++			 "A14-DP: USB exit enter init=%d usb_init=%u dp_init=%u powered=%u qmp_mode=%u\n",
++			 qmp->init_count, qmp->usb_init_count, qmp->dp_init_count,
++			 qmp->dp_powered_on, qmp->qmpphy_mode);
+ 	ret = qmp_combo_usb_power_off(phy);
+ 	if (ret)
+ 		goto out_unlock;
+@@ -4209,6 +4224,11 @@
+ 	qmp->usb_init_count--;
+ 
+ out_unlock:
++	if (qmp->cfg == &glymur_usb3dpphy_cfg)
++		dev_info(qmp->dev,
++			 "A14-DP: USB exit done init=%d usb_init=%u dp_init=%u powered=%u qmp_mode=%u\n",
++			 qmp->init_count, qmp->usb_init_count, qmp->dp_init_count,
++			 qmp->dp_powered_on, qmp->qmpphy_mode);
+ 	mutex_unlock(&qmp->phy_mutex);
+ 	return ret;
+ }
+@@ -4692,6 +4712,17 @@
+ 	return 0;
+ }
+ 
++/*
++ * Temporary Glymur detach experiment. Do not interpret a SAFE notification
++ * as a request to restart USB on a disappearing partner. USB/DP consumers
++ * still own their normal power-off/exit operations. This is not a general
++ * implementation of electrical Type-C safe mode.
++ */
++static bool a14_defer_safe_reinit = true;
++module_param(a14_defer_safe_reinit, bool, 0644);
++MODULE_PARM_DESC(a14_defer_safe_reinit,
++	"A14 test: defer SAFE mux reinitialization to consumer teardown");
++
+ static int qmp_combo_typec_mux_set(struct typec_mux_dev *mux, struct typec_mux_state *state)
+ {
+ 	struct qmp_combo *qmp = typec_mux_get_drvdata(mux);
+@@ -4700,6 +4731,24 @@
+ 	unsigned int svid;
+ 
+ 	guard(mutex)(&qmp->phy_mutex);
++
++	/*
++	 * A14 experiment: PMIC GLINK sends SAFE before DRM HPD-low on
++	 * physical detach. The normal !DP-SVID path below maps SAFE to
++	 * USB3_ONLY and can force a shared COM reset/restart while DP
++	 * teardown is still pending. Leave both cached mode and hardware
++	 * unchanged here; normal consumer exits release their references.
++	 * Real USB/DP mode requests continue through the existing path.
++	 */
++	if (READ_ONCE(a14_defer_safe_reinit) &&
++	    cfg == &glymur_usb3dpphy_cfg &&
++	    !state->alt && state->mode == TYPEC_STATE_SAFE) {
++		dev_info(qmp->dev,
++			 "A14-DP: SAFE detach deferred init=%d usb_init=%u dp_init=%u powered=%u qmp_mode=%u\n",
++			 qmp->init_count, qmp->usb_init_count, qmp->dp_init_count,
++			 qmp->dp_powered_on, qmp->qmpphy_mode);
++		return 0;
++	}
+ 
+ 	if (state->alt)
+ 		svid = state->alt->svid;

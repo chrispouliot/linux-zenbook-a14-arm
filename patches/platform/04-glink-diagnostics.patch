@@ -1,0 +1,84 @@
+Subject: [A14 platform 04/18] glink diagnostics
+
+Extracted mechanically from Python rewrite 4 in the tested postPatch recipe.
+No resulting source changes; existing diagnostics and workarounds are retained.
+Apply in the order in kernel/a14-post-patch.nix, after its DT appends.
+The existing bank0 patch remains between platform patches 09 and 10.
+
+diff --git a/drivers/soc/qcom/pmic_glink_altmode.c b/drivers/soc/qcom/pmic_glink_altmode.c
+--- a/drivers/soc/qcom/pmic_glink_altmode.c
++++ b/drivers/soc/qcom/pmic_glink_altmode.c
+@@ -352,6 +352,16 @@
+ 	struct pmic_glink_altmode *altmode = alt_port->altmode;
+ 	enum drm_connector_status conn_status;
+ 
++	dev_info(altmode->dev,
++		 "A14-DP: WORK port=%u svid=%#x mux=%u mode=%u hpd=%u irq=%u orientation=%u\n",
++		 alt_port->index,
++		 alt_port->svid,
++		 alt_port->mux_ctrl,
++		 alt_port->mode,
++		 alt_port->hpd_state,
++		 alt_port->hpd_irq,
++		 alt_port->orientation);
++
+ 	typec_switch_set(alt_port->typec_switch, alt_port->orientation);
+ 
+ 	/*
+@@ -440,6 +450,10 @@
+ 
+ 	svid = mux == 2 ? USB_TYPEC_DP_SID : 0;
+ 
++	dev_info(altmode->dev,
++		 "A14-DP: RX8180 port=%u svid=%#x mux=%u mode=%u hpd=%u irq=%u orientation=%u\n",
++		 port, svid, mux, mode, hpd_state, hpd_irq, orientation);
++
+ 	if (port >= ARRAY_SIZE(altmode->ports) || !altmode->ports[port].altmode) {
+ 		dev_dbg(altmode->dev, "notification on undefined port %d\n", port);
+ 		return;
+@@ -451,7 +465,10 @@
+ 	alt_port->mode = mode;
+ 	alt_port->hpd_state = hpd_state;
+ 	alt_port->hpd_irq = hpd_irq;
+-	queue_work(system_freezable_wq, &alt_port->work);
++	if (!queue_work(system_freezable_wq, &alt_port->work))
++		dev_info(altmode->dev,
++			 "A14-DP: queue_work returned false port=%u\n",
++			 alt_port->index);
+ }
+ 
+ #define SC8280XP_DPAM_MASK	0x3f
+@@ -479,6 +496,10 @@
+ 	port = notify->port_idx;
+ 	orientation = notify->orientation;
+ 
++	dev_info(altmode->dev,
++		 "A14-DP: RX8280 port=%u svid=%#x mux=%u orientation=%u\n",
++		 port, svid, notify->mux_ctrl, orientation);
++
+ 	if (port >= ARRAY_SIZE(altmode->ports) || !altmode->ports[port].altmode) {
+ 		dev_dbg(altmode->dev, "notification on undefined port %d\n", port);
+ 		return;
+@@ -491,6 +512,10 @@
+ 
+ 	if (svid == USB_TYPEC_DP_SID) {
+ 		dp = &notify->extended_data.dp;
++
++		dev_info(altmode->dev,
++			 "A14-DP: RX8280-DP port=%u pin=%u hpd=%u irq=%u\n",
++			 port, dp->pin_assignment, dp->hpd_state, dp->hpd_irq);
+ 
+ 		alt_port->mode = dp->pin_assignment - DPAM_HPD_A;
+ 		alt_port->hpd_state = dp->hpd_state;
+@@ -502,7 +527,10 @@
+ 		alt_port->tbt_data = *tbt;
+ 	}
+ 
+-	queue_work(system_freezable_wq, &alt_port->work);
++	if (!queue_work(system_freezable_wq, &alt_port->work))
++		dev_info(altmode->dev,
++			 "A14-DP: queue_work returned false port=%u\n",
++			 alt_port->index);
+ }
+ 
+ static void pmic_glink_altmode_callback(const void *data, size_t len, void *priv)

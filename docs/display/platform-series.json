@@ -1,0 +1,156 @@
+{
+  "source_revision": "51231839d5ef007638bd1c3500e6a76b337a66f3",
+  "post_patch_order": [
+    {
+      "rewrite": 1,
+      "path": "patches/platform/01-external-dp-hbr2.patch",
+      "sha256": "dc8913544feb420f7540deadee5530c05e73e021c1d918e3b9ab60898479dcb4",
+      "source_files": [
+        "arch/arm64/boot/dts/qcom/glymur-asus-zenbook-a14-ux3407na.dts"
+      ]
+    },
+    {
+      "rewrite": 2,
+      "path": "patches/platform/02-audio-stereo.patch",
+      "sha256": "3c87c50555ae50860b816f7b91941322556ce09b38fc6a2388e16c14eab901de",
+      "source_files": [
+        "sound/soc/qcom/x1e80100.c"
+      ]
+    },
+    {
+      "rewrite": 3,
+      "path": "patches/platform/03-hid-fn-lock.patch",
+      "sha256": "1198e393b2f64479a651255aee721dc1c796e325c566048a19a16d97f2cf1fd3",
+      "source_files": [
+        "drivers/hid/hid-asus.c"
+      ]
+    },
+    {
+      "rewrite": 4,
+      "path": "patches/platform/04-glink-diagnostics.patch",
+      "sha256": "74fc065d14df9723ed9ae09c37d3b51173182355fb44dc798d9a22a0c930fc50",
+      "source_files": [
+        "drivers/soc/qcom/pmic_glink_altmode.c"
+      ]
+    },
+    {
+      "rewrite": 5,
+      "path": "patches/platform/05-hpd-irq-containment.patch",
+      "sha256": "bb644b58187124f3effe9dd574843f7d65fde2c80b70122f3d91c25ff86ade49",
+      "source_files": [
+        "drivers/soc/qcom/pmic_glink_altmode.c"
+      ]
+    },
+    {
+      "rewrite": 6,
+      "path": "patches/platform/06-dp-hpd-state.patch",
+      "sha256": "40ae0a21709992d3bf49693a965a4298655b508097d726646cb9bf486db87580",
+      "source_files": [
+        "drivers/gpu/drm/msm/dp/dp_display.c"
+      ]
+    },
+    {
+      "rewrite": 7,
+      "path": "patches/platform/07-dp-link-bandwidth.patch",
+      "sha256": "3392d48fb4b95aeeb070d2bac12248fe708a6d31052ba89f3c2f10b158d2618e",
+      "source_files": [
+        "drivers/gpu/drm/msm/dp/dp_display.c"
+      ]
+    },
+    {
+      "rewrite": 8,
+      "path": "patches/platform/08-aux-wrong-data-count.patch",
+      "sha256": "0a19dd72ca6a44a020802fb658aedd5eb97dce18f53b050a0309b2e8cd4f8413",
+      "source_files": [
+        "drivers/gpu/drm/msm/dp/dp_aux.c"
+      ]
+    },
+    {
+      "rewrite": 9,
+      "path": "patches/platform/09-phy-startup.patch",
+      "sha256": "e6295288d6f1098d39e974c11be8dc34ea11a7b833a655755701df739d238937",
+      "source_files": [
+        "drivers/gpu/drm/msm/dp/dp_ctrl.c",
+        "drivers/phy/qualcomm/phy-qcom-qmp-combo.c"
+      ]
+    },
+    {
+      "path": "patches/a14-dp-usb-preserve-bank0.patch",
+      "sha256": "f8893386321d90a5f5d9012c4ea404c20e269fb20d113cc22604e1b8a74a4e71",
+      "existing": true
+    },
+    {
+      "rewrite": 10,
+      "path": "patches/platform/10-usb-domain-retention.patch",
+      "sha256": "2e606b9d9ea406fc848a99bc2c98cb0b957d7bfb5e520f452e8e18f28d22350f",
+      "source_files": [
+        "drivers/clk/qcom/gcc-glymur.c"
+      ]
+    },
+    {
+      "rewrite": 11,
+      "path": "patches/platform/11-hpd-disconnect-retention.patch",
+      "sha256": "b0a61a3a396ac8ea6431e2ad35650d155a29378098d1f91447a2f88b3d93615d",
+      "source_files": [
+        "drivers/gpu/drm/bridge/aux-hpd-bridge.c",
+        "drivers/soc/qcom/pmic_glink_altmode.c"
+      ]
+    },
+    {
+      "rewrite": 12,
+      "path": "patches/platform/12-phy-safe-detach.patch",
+      "sha256": "01acebcc97e9d84300e7ba4e87b39f52885e4c340c8ca8734cf585a3649792e6",
+      "source_files": [
+        "drivers/phy/qualcomm/phy-qcom-qmp-combo.c"
+      ]
+    },
+    {
+      "rewrite": 13,
+      "path": "patches/platform/13-dp-live-sink-check.patch",
+      "sha256": "e44d3b8917923e06f614d052eebc7c7ee52c1b073a7dafab217fec7da1d68c8d",
+      "source_files": [
+        "drivers/gpu/drm/msm/dp/dp_display.c"
+      ]
+    },
+    {
+      "rewrite": 14,
+      "path": "patches/platform/14-hpd-bootstrap.patch",
+      "sha256": "c7ce9c4960030e72f4fd9a5693d239c2101cf80bde8052df2987767a0ce0b2b2",
+      "source_files": [
+        "drivers/soc/qcom/pmic_glink_altmode.c"
+      ]
+    },
+    {
+      "rewrite": 15,
+      "path": "patches/platform/15-usb-dp-lifecycle.patch",
+      "sha256": "99f06e1a145ea4db017a262943c37f34ada396241a522cd59982f00dead8b28f",
+      "source_files": [
+        "drivers/phy/qualcomm/phy-qcom-qmp-combo.c"
+      ]
+    },
+    {
+      "rewrite": 16,
+      "path": "patches/platform/16-phy-boot-mode.patch",
+      "sha256": "1f59e9b51c19a34d6c41fd3d49975a9faae22c8cfae05bf462f9daf1931bb243",
+      "source_files": [
+        "drivers/phy/qualcomm/phy-qcom-qmp-combo.c"
+      ]
+    },
+    {
+      "rewrite": 17,
+      "path": "patches/platform/17-dpcd-probe.patch",
+      "sha256": "bc72f4b6a46fbaf8fc28ae47ecdbad8e2e3daf71e8eb6ec45870fd86722e80d4",
+      "source_files": [
+        "drivers/gpu/drm/msm/dp/dp_aux.c"
+      ]
+    },
+    {
+      "rewrite": 18,
+      "path": "patches/platform/18-repeater-caps-recovery.patch",
+      "sha256": "8c76df7bc4bf51e083b3f047de418759f930a5a9586781c413b68f329e5f0d4f",
+      "source_files": [
+        "drivers/gpu/drm/msm/dp/dp_display.c"
+      ]
+    }
+  ]
+}
