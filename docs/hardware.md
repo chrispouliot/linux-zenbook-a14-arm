@@ -32,7 +32,7 @@ helper are fully opt-in.
 | `audio.enable` | `true` | Topology, UCM, PipeWire, speaker routing and HDMI hotplug |
 | `audio.speakerGain` | `1.0` | Gain multiplier; source owner used `1.50` |
 | `experimental.scmiMailbox` | `false` | Adds the original diagnostic SCMI mailbox-write patch; rebuilds kernel |
-| `experimental.camera.enable` | `false` | Builds the backported camera drivers and the unverified A14 camera board description; rebuilds kernel |
+| `camera.enable` | `true` | Camera drivers, board description, libcamera and the udmabuf rule; turning it off rebuilds the kernel |
 | `diagnostics.unrestrictedDevmem` | `false` | Builds without STRICT_DEVMEM so acpidump can read the firmware ACPI tables; rebuilds kernel |
 | `diagnostics.verbose` | `false` | Adds `drm.debug=0x100`; defaults console verbosity to 7 |
 | `diagnostics.ramoops32GiB.enable` | `false` | Original reserved memory and pstore helper, only for the verified memory layout |
@@ -83,12 +83,13 @@ nixpkgs input until tested. A new kernel source requires checking every patch
 and every exact-match replacement in `postPatch`, building, and validating
 hardware. Keeping the patch body intact is deliberate for this initial release.
 
-## Camera (experimental)
+## Camera
 
-`experimental.camera.enable` adds the front camera as an opt-in build. It
-works on the UX3407NA: 1920x1092 at 30 fps through the software ISP on the
-GPU, tested with `cam` and GNOME Snapshot. The privacy LED wiring is in the
-board description but has not been observed on hardware yet.
+The front camera is enabled by default; `camera.enable = false` removes the
+drivers, the board description and the userspace pieces. The older
+`experimental.camera.enable` name is still accepted. It works on the UX3407NA: 1920x1092 at 30 fps through the software ISP on the
+GPU, tested with `cam` and GNOME Snapshot, and the privacy LED lights while
+the sensor streams.
 Three parts are involved:
 
 - **Driver backports** (`patches/camera/`): fifteen commits taken from

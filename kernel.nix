@@ -4,13 +4,13 @@
   linuxPackagesFor,
   glymurSrc,
   scmiMailbox ? false,
-  camera ? false,
+  camera ? true,
   strictDevmem ? true,
   ...
 }:
 
 let
-  # Experimental front-camera support (camera = true): Glymur CAMSS, CSI2 PHY,
+  # Front-camera support (camera = true, the default): Glymur CAMSS, CSI2 PHY,
   # CCI and PM8010 backports from linux-msm topic/glymur-laptops and the
   # September 2026 upstream Glymur camera series, rediffed against the pinned
   # snapshot. See docs/hardware.md.

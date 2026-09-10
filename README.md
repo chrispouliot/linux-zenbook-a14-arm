@@ -12,7 +12,7 @@ This project is not responsible for the initial device tree mainlining or A14 su
 
 Status reflects the currently used **NixOS configuration on the UX3407NA with the project's patched Glymur kernel and required firmware**. It does not mean the new installer ISO or every peripheral has been validated. Arch users also need the equivalent userspace configuration, particularly for audio.
 
-Overall I use this as my daily driver and it works very well. Please note the webcam is an opt-in experimental build and the USB 4 limitations.
+Overall I use this as my daily driver and it works very well. Please note the USB 4 limitations.
 
 
 | Feature | Status | Patches, workarounds or remaining limitations |
@@ -31,7 +31,7 @@ Overall I use this as my daily driver and it works very well. Please note the we
 | USB-C DisplayPort / external-display hotplug | Working on tested setup; experimental | Port one through the tested Amazon Basics TB4/USB4 dock supports 4K144 with DSC and transparent LTTPR. Boot, standby, suspend and replug have passed on that setup. The second external controller retains an HBR2 cap; other docks and cable orientations still need testing. See [display status](docs/display/README.md). |
 | Suspend/resume | Working with workarounds; setup-dependent | Uses s2idle, the internal-display link cap, USB-C power-domain retention and display/PHY fixes. External displays, docks and audio need testing in each setup. |
 | CPU performance | Partial | CPU governors are available, but single-core performance remains below Windows in testing. The optional SCMI mailbox patch is diagnostic, not a proven fix. |
-| Webcam | Working with patches; opt-in | Backported Glymur camera drivers, a board description confirmed against the A14 firmware tables, and libcamera's software ISP through PipeWire, behind `experimental.camera.enable`. Tested in GNOME Snapshot. The privacy LED wiring is included but still awaiting its first boot; see [camera notes](docs/hardware.md#camera-experimental). |
+| Webcam | Working with patches | Backported Glymur camera drivers, a board description confirmed against the A14 firmware tables, and libcamera's software ISP through PipeWire. Tested in GNOME Snapshot; the privacy LED lights while streaming. Enabled by default, `camera.enable` turns it off. See [camera notes](docs/hardware.md#camera). |
 | Internal microphone | Working | Uses the microphone paths in the AudioReach topology and the always-on Speaker + Mic UCM tree. Verified with a PipeWire recording and playback. |
 | USB4 | Not working | Native USB4 operation is not working. USB peripherals or display output working through a USB4-capable dock does not mean its USB4 features are operating. |
 
@@ -1532,7 +1532,7 @@ You have already completed the ISO-building and USB-writing steps. The same USB 
 
 ## Included patches
 
-These are the project's additions to the pinned Glymur kernel, including device-tree and audio files and the ordered platform patches under `patches/platform/`. Some display workarounds remain experimental. The older Python rewrites are now [eighteen platform patches](docs/display/PLATFORM.md), with the same resulting source. The four display patches form an ordered series and are not independent opt-in features; see [display integration and validation](docs/display/README.md). The SCMI mailbox patch, the camera backports and fixed-address ramoops diagnostics are **opt-in**; other retained DP diagnostics remain part of the baseline.
+These are the project's additions to the pinned Glymur kernel, including device-tree and audio files and the ordered platform patches under `patches/platform/`. Some display workarounds remain experimental. The older Python rewrites are now [eighteen platform patches](docs/display/PLATFORM.md), with the same resulting source. The four display patches form an ordered series and are not independent opt-in features; see [display integration and validation](docs/display/README.md). The SCMI mailbox patch and fixed-address ramoops diagnostics are **opt-in**; the camera support is on by default and can be turned off; other retained DP diagnostics remain part of the baseline.
 
 <details>
 <summary><strong>Show all patches and hardware adjustments</strong></summary>
@@ -1554,9 +1554,9 @@ These are the project's additions to the pinned Glymur kernel, including device-
 | [`a14-display-edp-depth.patch`](patches/a14-display-edp-depth.patch) | Finalizes the native internal panel's colour depth after powered capability setup, preserving its HBR link cap. |
 | [Legacy dock recovery v4](display/options/dock-recovery-v4.nix) — optional | Overrides the personal v3 boot service only if its existing option is enabled. Currently disabled in the tested personal configuration; a docked boot passed without it and without the 30-second grace period. |
 | [`a14-scmi-mailbox-set-test.patch`](patches/a14-scmi-mailbox-set-test.patch) — opt-in | Tests CPU performance requests through SCMI mailbox messages instead of fast-channel writes. It is not a proven performance fix. |
-| [Camera driver backports](patches/camera/) — opt-in | Fifteen commits from linux-msm `topic/glymur-laptops` and the September 2026 upstream Glymur camera series: PHY core helpers, the CSI2 PHY driver, CAMSS PHY-API and Glymur support, PM8010 camera PMIC support, and the Glymur CAMSS, CSIPHY, CCI and MCLK device-tree nodes. Enabled by `experimental.camera.enable`. |
-| [`a14-camera.dtsi`](patches/a14-camera.dtsi) — opt-in, unverified | Describes the OV02C10 front camera on CSIPHY4 with a PM8010 camera PMIC, copied from the Zenbook A16 and CRD wiring. Not yet confirmed against the A14's own firmware tables. |
-| [Camera userspace](modules/camera.nix) — opt-in | Installs libcamera and v4l-utils and keeps PipeWire/WirePlumber enabled so the software-ISP camera appears to applications. |
+| [Camera driver backports](patches/camera/) | Fifteen commits from linux-msm `topic/glymur-laptops` and the September 2026 upstream Glymur camera series: PHY core helpers, the CSI2 PHY driver, CAMSS PHY-API and Glymur support, PM8010 camera PMIC support, and the Glymur CAMSS, CSIPHY, CCI and MCLK device-tree nodes. On by default; `camera.enable = false` drops them. |
+| [`a14-camera.dtsi`](patches/a14-camera.dtsi) | Describes the OV02C10 front camera on CSIPHY4 with a PM8010 camera PMIC and the privacy LED, following the Zenbook A16 and CRD wiring and confirmed against the A14's firmware tables. |
+| [Camera userspace](modules/camera.nix) | Installs libcamera and v4l-utils, keeps PipeWire/WirePlumber enabled, and gives the video group access to udmabuf so the software-ISP camera appears to applications. |
 | [External DP1 link limit](patches/platform/01-external-dp-hbr2.patch) | Caps the second external controller (`mdss_dp1`, af5c000) at HBR2 / 5.4 Gbit/s per lane. The working port-one dock path uses af54000 and can negotiate HBR3. |
 | [Stereo speaker backend](patches/platform/02-audio-stereo.patch) | Restricts the WSA backend to two channels while retaining the existing four-channel audio frontend. |
 | [Keyboard Fn-lock support](patches/platform/03-hid-fn-lock.patch) | Enables Fn-lock for the Zenbook keyboard, with media/brightness keys used directly and Fn for F1–F12. |

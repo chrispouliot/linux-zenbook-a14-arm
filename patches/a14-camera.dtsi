@@ -1,8 +1,8 @@
 /*
- * EXPERIMENTAL: ASUS Zenbook A14 UX3407NA (Glymur) front RGB camera.
+ * ASUS Zenbook A14 UX3407NA (Glymur) front RGB camera.
  *
- * Appended to the board dts by kernel/a14-camera-post-patch.nix when
- * hardware.asus.zenbookA14.experimental.camera.enable is set.
+ * Appended to the board dts by kernel/a14-camera-post-patch.nix unless
+ * hardware.asus.zenbookA14.camera.enable is turned off.
  *
  * The wiring follows Qualcomm's reference camera layout as used by the Glymur
  * CRD (upstream "Add CCI and CAMSS support for Glymur" DTS series, 2026-09-07)

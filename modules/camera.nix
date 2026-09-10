@@ -2,7 +2,7 @@
 let
   cfg = config.hardware.asus.zenbookA14;
 in {
-  config = lib.mkIf cfg.experimental.camera.enable {
+  config = lib.mkIf cfg.camera.enable {
     # CAMSS delivers raw Bayer frames only. libcamera's simple pipeline handler
     # (built with the qcom-camss entry in nixpkgs' libcamera) and its software
     # ISP turn them into usable video. nixpkgs' PipeWire is built with

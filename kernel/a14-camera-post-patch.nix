@@ -1,8 +1,8 @@
-# Experimental camera board description. Only appended when kernel.nix is
-# called with camera = true. The driver and SoC device-tree backports are
+# Camera board description. Only appended when kernel.nix is called with
+# camera = true (the default). The driver and SoC device-tree backports are
 # applied earlier as regular patches (see cameraPatches in kernel.nix).
 ''
-      echo "Appending ASUS A14 experimental camera board description"
+      echo "Appending ASUS A14 camera board description"
       cat ${../patches/a14-camera.dtsi} \
         >> arch/arm64/boot/dts/qcom/glymur-asus-zenbook-a14-ux3407na.dts
 
