@@ -21,7 +21,7 @@ let
     "gpi" "i2c_qcom_geni" "i2c_hid_of"
   ];
 in {
-  imports = [ (import ./audio.nix inputs hardwarePkgs) ./ramoops.nix ];
+  imports = [ (import ./audio.nix inputs hardwarePkgs) ./ramoops.nix ./camera.nix ];
 
   options.hardware.asus.zenbookA14 = {
     firmwareSource = lib.mkOption {
@@ -43,6 +43,16 @@ in {
       type = lib.types.bool;
       default = false;
       description = "Use the source configuration's experimental SCMI mailbox performance writes. Changes the kernel build; not a proven performance fix.";
+    };
+    experimental.camera.enable = lib.mkOption {
+      type = lib.types.bool;
+      default = false;
+      description = "Build the experimental front-camera support: backported Glymur CAMSS, CSI2 PHY, CCI and PM8010 drivers plus an unverified UX3407NA camera board description copied from the Zenbook A16. Rebuilds the kernel; see docs/hardware.md.";
+    };
+    diagnostics.unrestrictedDevmem = lib.mkOption {
+      type = lib.types.bool;
+      default = false;
+      description = "Build the kernel without STRICT_DEVMEM so acpidump can read the firmware ACPI tables through /dev/mem on this device-tree boot. Diagnostic only; rebuilds the kernel.";
     };
     diagnostics.verbose = lib.mkOption {
       type = lib.types.bool;
@@ -76,6 +86,8 @@ in {
     boot.kernelPackages = hardwarePkgs.callPackage ../kernel.nix {
       glymurSrc = inputs.glymur-kernel;
       scmiMailbox = cfg.experimental.scmiMailbox;
+      camera = cfg.experimental.camera.enable;
+      strictDevmem = !cfg.diagnostics.unrestrictedDevmem;
     };
 
     hardware.deviceTree = {

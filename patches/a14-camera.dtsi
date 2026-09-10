@@ -1,0 +1,144 @@
+/*
+ * EXPERIMENTAL, UNVERIFIED: ASUS Zenbook A14 UX3407NA (Glymur) front RGB camera.
+ *
+ * Appended to the board dts by kernel/a14-camera-post-patch.nix when
+ * hardware.asus.zenbookA14.experimental.camera.enable is set.
+ *
+ * The wiring is copied from two boards that share Qualcomm's reference
+ * camera layout: the Glymur CRD (upstream "Add CCI and CAMSS support for
+ * Glymur" DTS series, 2026-09-07) and the Zenbook A16 UX3607OA camera
+ * commit on linux-msm topic/glymur-laptops (3e050b87349a). Both use an
+ * OV02C10 at 0x36 on CCI1 bus 1 (asc_cci, GPIO 235/236), MCLK4 on GPIO 100,
+ * sensor reset on GPIO 239, CSIPHY4 with two data lanes, and a PM8010
+ * camera PMIC at 0x08 on QUP i2c5 with its reset on GPIO 106.
+ *
+ * None of this has been checked against the A14's own ACPI tables yet.
+ * The CSIPHY rails are the only values known to match: the A14 dts already
+ * defines the same F_E1 LDOs at the same voltages as the A16.
+ */
+
+#include <dt-bindings/media/video-interfaces.h>
+
+/* Camera PMIC. Unverified: bus (i2c5), address (0x08) and reset GPIO (106). */
+&i2c5 {
+	clock-frequency = <400000>;
+
+	status = "okay";
+
+	pm8010: pmic@8 {
+		compatible = "qcom,pm8010";
+		reg = <0x8>;
+
+		reset-gpios = <&tlmm 106 GPIO_ACTIVE_LOW>;
+
+		pinctrl-0 = <&pm8010_default>;
+		pinctrl-names = "default";
+
+		gpio-controller;
+		#gpio-cells = <2>;
+		gpio-ranges = <&pm8010 0 0 2>;
+
+		interrupt-controller;
+		#interrupt-cells = <2>;
+
+		#thermal-sensor-cells = <0>;
+
+		regulators {
+			/* L1/L2 and L5/L6 are unused on the A16. Unverified for the A14. */
+			vreg_l3m: ldo3 {
+				regulator-name = "vreg_l3m";
+				regulator-min-microvolt = <2800000>;
+				regulator-max-microvolt = <2800000>;
+			};
+
+			vreg_l4m: ldo4 {
+				regulator-name = "vreg_l4m";
+				regulator-min-microvolt = <1800000>;
+				regulator-max-microvolt = <1800000>;
+			};
+
+			vreg_l7m: ldo7 {
+				regulator-name = "vreg_l7m";
+				regulator-min-microvolt = <2800000>;
+				regulator-max-microvolt = <2800000>;
+			};
+		};
+	};
+};
+
+&camss {
+	status = "okay";
+};
+
+&camss_csiphy4_inep {
+	data-lanes = <1 2>;
+};
+
+&cci1 {
+	pinctrl-0 = <&cci1_1_default>;
+	pinctrl-1 = <&cci1_1_sleep>;
+
+	status = "okay";
+};
+
+&cci1_i2c1 {
+	/* Unverified: sensor model, address and reset GPIO. */
+	camera@36 {
+		compatible = "ovti,ov02c10";
+		reg = <0x36>;
+
+		reset-gpios = <&tlmm 239 GPIO_ACTIVE_LOW>;
+		pinctrl-0 = <&cam_mclk4_default>, <&cam_reset4_default>;
+		pinctrl-names = "default";
+
+		clocks = <&camcc CAM_CC_MCLK4_CLK>;
+		assigned-clocks = <&camcc CAM_CC_MCLK4_CLK>;
+		assigned-clock-rates = <19200000>;
+
+		orientation = <0>;
+
+		/* Unverified rails. The A16 feeds AVDD from L7 (2.8 V) and DOVDD/DVDD from L4 (1.8 V). */
+		avdd-supply = <&vreg_l7m>;
+		dovdd-supply = <&vreg_l4m>;
+		dvdd-supply = <&vreg_l4m>;
+
+		port {
+			ov02c10_out_ep: endpoint {
+				data-lanes = <1 2>;
+				link-frequencies = /bits/ 64 <400000000>;
+				remote-endpoint = <&csiphy4_in_ep>;
+			};
+		};
+	};
+};
+
+&csiphy4 {
+	/* Same F_E1 rails and voltages as the A16 (0.904 V and 1.2 V). */
+	vdda-0p9-supply = <&vreg_l1f_e1>;
+	vdda-1p2-supply = <&vreg_l4f_e1>;
+
+	status = "okay";
+};
+
+&csiphy4_in_ep {
+	bus-type = <MEDIA_BUS_TYPE_CSI2_DPHY>;
+	clock-lanes = <0>;
+	data-lanes = <1 2>;
+	remote-endpoint = <&ov02c10_out_ep>;
+};
+
+&tlmm {
+	cam_reset4_default: cam-reset4-default-state {
+		pins = "gpio239";
+		function = "gpio";
+		drive-strength = <2>;
+		bias-disable;
+	};
+
+	pm8010_default: pm8010-default-state {
+		pins = "gpio106";
+		function = "gpio";
+		drive-strength = <2>;
+		bias-disable;
+	};
+};

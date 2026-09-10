@@ -32,6 +32,8 @@ helper are fully opt-in.
 | `audio.enable` | `true` | Topology, UCM, PipeWire, speaker routing and HDMI hotplug |
 | `audio.speakerGain` | `1.0` | Gain multiplier; source owner used `1.50` |
 | `experimental.scmiMailbox` | `false` | Adds the original diagnostic SCMI mailbox-write patch; rebuilds kernel |
+| `experimental.camera.enable` | `false` | Builds the backported camera drivers and the unverified A14 camera board description; rebuilds kernel |
+| `diagnostics.unrestrictedDevmem` | `false` | Builds without STRICT_DEVMEM so acpidump can read the firmware ACPI tables; rebuilds kernel |
 | `diagnostics.verbose` | `false` | Adds `drm.debug=0x100`; defaults console verbosity to 7 |
 | `diagnostics.ramoops32GiB.enable` | `false` | Original reserved memory and pstore helper, only for the verified memory layout |
 | `usb.viaHubWorkaround` | `true` | Original VIA `2109:0817/2817` suspend/power workarounds |
@@ -80,3 +82,67 @@ dependencies. Avoid making this flake's nixpkgs follow a changing personal
 nixpkgs input until tested. A new kernel source requires checking every patch
 and every exact-match replacement in `postPatch`, building, and validating
 hardware. Keeping the patch body intact is deliberate for this initial release.
+
+## Camera (experimental)
+
+`experimental.camera.enable` adds the front camera as an untested, opt-in
+build. Three parts are involved:
+
+- **Driver backports** (`patches/camera/`): fifteen commits taken from
+  linux-msm `topic/glymur-laptops` and the September 2026 upstream Glymur
+  camera series, rediffed against the pinned snapshot. They add the generic
+  Qualcomm CSI2 PHY driver and the PHY core helpers it needs, teach CAMSS to
+  drive PHYs through the PHY API and accept the Glymur compatible, add PM8010
+  support to the PM8008 MFD and regulator drivers, and add the Glymur CAMSS,
+  CSIPHY, CCI and MCLK nodes to the SoC device tree. Glymur's camera block is
+  a subset of the X1E80100 one, so the CAMSS driver change is small.
+- **Board description** (`patches/a14-camera.dtsi`): the OV02C10 sensor at
+  0x36 on CCI1 bus 1, MCLK4, reset on GPIO 239, CSIPHY4 with two lanes, and a
+  PM8010 camera PMIC at 0x08 on i2c5 with reset on GPIO 106. This is the
+  Zenbook A16 and CRD wiring. Only the CSIPHY rails are known to match the A14;
+  the rest is an assumption until the A14's ACPI tables confirm it.
+- **Userspace** (`modules/camera.nix`): libcamera and v4l-utils, with PipeWire
+  and WirePlumber kept on. CAMSS produces raw Bayer frames; libcamera's simple
+  pipeline handler and software ISP convert them, and applications use the
+  camera through PipeWire. Firefox needs `media.webrtc.camera.allow-pipewire`.
+
+Kernel configuration: the pinned kernel already builds CAMSS, CCI, the camera
+clock controller, the PM8008 drivers and the OV02C10 driver as modules; the
+option adds the new `PHY_QCOM_MIPI_CSI2` module and pins the rest explicitly.
+
+### First test on the device
+
+1. `dmesg | grep -i -E 'camss|csiphy|csi2|cci|pm8010|ov02c10'` for probe
+   messages.
+2. `i2cdetect -y <i2c5 bus number>` should show 0x08 (the bus number appears in
+   `ls -l /sys/bus/i2c/devices | grep b94000`). Nothing there means the PMIC
+   bus or its reset GPIO is wrong.
+3. A sensor chip-ID error means power is present but a rail or the reset GPIO
+   is wrong. A CCI transfer timeout means the sensor is unpowered or on the
+   other bus.
+4. `media-ctl -p`, then `cam -l` and `cam -c1 -C10`. Afterwards `wpctl status`
+   should list an `ov02c10` libcamera source.
+
+### If it does not probe: dump the ACPI tables
+
+The Windows firmware describes the camera PMIC (I2C address, controller and
+reset GPIO), the camera GPIOs and the CSIPHY in the DSDT. On this device-tree
+boot `acpidump` finds the tables through `/sys/firmware/efi/systab` but needs
+`/dev/mem`, which `STRICT_DEVMEM` blocks because the firmware places the
+tables inside memory the kernel counts as RAM. Build once with
+`diagnostics.unrestrictedDevmem = true`, boot it, then:
+
+```bash
+nix shell nixpkgs#acpica-tools
+sudo acpidump -c off -b
+iasl -d dsdt.dat
+```
+
+Turn the option off again afterwards. In `dsdt.dsl`, look for the camera
+platform device (CCI register windows at `0x0AC15000`/`0x0AC16000` and GpioIo
+pins), the I2C camera PMIC device (`I2cSerialBusV2` entries at `0x0008` and
+`0x0009`, its controller name, and reset GpioIo pins) and the CSIPHY device.
+Map the ACPI I2C controller to a device-tree bus by its register address.
+The sensor's own power sequence is not in the DSDT; it lives in the Qualcomm
+camera driver's `com.qti.sensormodule.*.bin` and `CAMF_RES_*.bin` files,
+which ASUS ships in its downloadable Qualcomm board support package.
