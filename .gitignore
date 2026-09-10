@@ -5,3 +5,4 @@ __pycache__/
 firmware/*
 !firmware/README.md
 private-firmware/
+.direnv/*
