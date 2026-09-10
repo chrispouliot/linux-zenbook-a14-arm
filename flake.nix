@@ -58,6 +58,83 @@
       nixosConfigurations.installer = mkInstaller {
         firmwareSource = windows-firmware.outPath;
       };
+      # The existing agent-sandbox image consumes this default devShell via inputsFrom.
+      devShells = forAllSystems (system: let
+        pkgs = nixpkgs.legacyPackages.${system};
+        nativeCC = pkgs.stdenv.cc;
+        cross = system != "aarch64-linux";
+        kernelCC = if cross then pkgs.pkgsCross.aarch64-multiplatform.stdenv.cc else nativeCC;
+        crossPrefix = if cross then kernelCC.targetPrefix else "";
+      in {
+        default = pkgs.mkShell {
+          name = "a14-kernel-development";
+
+          packages = (with pkgs; [
+            # Repository work, patch application, recorders, and Nix editing.
+            bashInteractive
+            coreutils
+            git
+            patch
+            diffutils
+            findutils
+            gnugrep
+            gnused
+            gawk
+            ripgrep
+            fd
+            jq
+            file
+            which
+            less
+            python3
+            nix
+            nixfmt
+            curl
+            cacert
+
+            # Kernel host tools and source/archive handling.
+            gnumake
+            pkg-config
+            bc
+            bison
+            flex
+            perl
+            pahole
+            dtc
+            openssl
+            rsync
+            cpio
+            gnutar
+            gzip
+            bzip2
+            xz
+            zstd
+            lz4
+            unzip
+          ]) ++ [
+            nativeCC
+            nativeCC.bintools
+          ] ++ pkgs.lib.optionals cross [
+            kernelCC
+            kernelCC.bintools
+          ];
+
+          # Headers and libraries used by host-side kernel build/config tools.
+          buildInputs = with pkgs; [ openssl elfutils ncurses zlib gmp libmpc mpfr ];
+
+          # inputsFrom inherits shellHook, but does not copy arbitrary environment
+          # attributes. Keep these exports here so the sandbox image receives them.
+          shellHook = ''
+            export ARCH=arm64
+            export CROSS_COMPILE="${crossPrefix}"
+            export CC="${kernelCC}/bin/${crossPrefix}gcc"
+            export HOSTCC="${nativeCC}/bin/gcc"
+            export HOSTCXX="${nativeCC}/bin/g++"
+            export NIX_HARDENING_ENABLE=""
+            export SSL_CERT_FILE="${pkgs.cacert}/etc/ssl/certs/ca-bundle.crt"
+          '';
+        };
+      });
       packages = forAllSystems (system: let
         pkgs = nixpkgs.legacyPackages.${system};
         kernelPackages = (hardwarePkgsFor system).callPackage ./kernel.nix {
