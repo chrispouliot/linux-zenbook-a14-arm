@@ -1,0 +1,88 @@
+--- a/drivers/gpu/drm/msm/dp/dp_ctrl.c
++++ b/drivers/gpu/drm/msm/dp/dp_ctrl.c
+@@ -48,6 +48,11 @@
+ module_param(a14_dp_sink_power_test, bool, 0444);
+ MODULE_PARM_DESC(a14_dp_sink_power_test,
+ 	"Test explicit A14 dock receiver D3/D0 sequencing across stream disable/enable");
++
++static bool a14_dp_sink_cleanup_test;
++module_param(a14_dp_sink_cleanup_test, bool, 0444);
++MODULE_PARM_DESC(a14_dp_sink_cleanup_test,
++	"Clear A14 sink DSC/FEC state for uncompressed starts and failed link training");
+ 
+ static bool a14_dp_repeater_restore_test;
+ module_param(a14_dp_repeater_restore_test, bool, 0444);
+@@ -2321,6 +2326,47 @@
+ 	return msm_dp_ctrl_a14_clear_sink(ctrl);
+ }
+ 
++/* Keep failed compressed setup from leaking sink state into the next mode. */
++static bool msm_dp_ctrl_a14_sink_cleanup_enabled(struct msm_dp_ctrl_private *ctrl)
++{
++	return a14_dp_sink_cleanup_test &&
++		msm_dp_ctrl_a14_wake_enabled(&ctrl->msm_dp_ctrl) &&
++		!(ctrl->link->sink_request & DP_TEST_LINK_PHY_TEST_PATTERN);
++}
++
++static int msm_dp_ctrl_a14_prepare_link_sink(struct msm_dp_ctrl_private *ctrl)
++{
++	if (!msm_dp_ctrl_a14_wake_enabled(&ctrl->msm_dp_ctrl) ||
++	    ctrl->stream_clks_on)
++		return 0;
++
++	/* Preserve the old DSC preparation when this additional gate is off. */
++	if (!DP_DSC_PANEL_EN(ctrl->panel) &&
++	    !msm_dp_ctrl_a14_sink_cleanup_enabled(ctrl))
++		return 0;
++
++	if (msm_dp_ctrl_a14_sink_cleanup_enabled(ctrl))
++		dev_info(ctrl->dev, "A14-DP-cleanup: prepare full link dsc=%u\n",
++			 !!DP_DSC_PANEL_EN(ctrl->panel));
++	return msm_dp_ctrl_a14_prepare_sink(ctrl);
++}
++
++static void msm_dp_ctrl_a14_failed_link_cleanup(struct msm_dp_ctrl_private *ctrl,
++					       int training_error)
++{
++	int ret;
++
++	if (!msm_dp_ctrl_a14_sink_cleanup_enabled(ctrl))
++		return;
++
++	/* AUX is still initialized here; its normal disconnect guards apply. */
++	ret = msm_dp_ctrl_a14_clear_sink(ctrl);
++	dev_info(ctrl->dev,
++		 "A14-DP-cleanup: failed link error=%d sink clear=%d before PHY shutdown\n",
++		 training_error, ret);
++	/* Even if the sink is unreachable, host teardown must continue. */
++}
++
+ static int msm_dp_ctrl_setup_main_link(struct msm_dp_ctrl_private *ctrl,
+ 			int *training_step)
+ {
+@@ -3025,13 +3071,10 @@
+ 	if (rc)
+ 		return rc;
+ 
+-	if (msm_dp_ctrl_a14_wake_enabled(msm_dp_ctrl) &&
+-	    DP_DSC_PANEL_EN(ctrl->panel) && !ctrl->stream_clks_on) {
+-		rc = msm_dp_ctrl_a14_prepare_sink(ctrl);
+-		if (rc) {
+-			dev_err(ctrl->dev, "A14-DSC-wake: prepare sink failed=%d\n", rc);
+-			goto training_done;
+-		}
++	rc = msm_dp_ctrl_a14_prepare_link_sink(ctrl);
++	if (rc) {
++		dev_err(ctrl->dev, "A14-DSC-wake: prepare sink failed=%d\n", rc);
++		goto training_done;
+ 	}
+ 
+ 	if (msm_dp_ctrl_a14_edp_native(ctrl)) {
+@@ -3120,6 +3163,7 @@
+ 		 */
+ 		msm_dp_ctrl_clear_training_pattern(ctrl, DP_PHY_DPRX);
+ 
++		msm_dp_ctrl_a14_failed_link_cleanup(ctrl, rc);
+ 		msm_dp_ctrl_deinitialize_mainlink(ctrl);
+ 		rc = -ECONNRESET;
+ 	}

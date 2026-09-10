@@ -1,0 +1,110 @@
+--- a/drivers/gpu/drm/msm/dp/dp_ctrl.c
++++ b/drivers/gpu/drm/msm/dp/dp_ctrl.c
+@@ -43,6 +43,11 @@
+ module_param(a14_dp_pair_config_test, bool, 0444);
+ MODULE_PARM_DESC(a14_dp_pair_config_test,
+ 	"Test one checked AUX write for A14 dock link rate and lane count");
++
++static bool a14_dp_sink_power_test;
++module_param(a14_dp_sink_power_test, bool, 0444);
++MODULE_PARM_DESC(a14_dp_sink_power_test,
++	"Test explicit A14 dock receiver D3/D0 sequencing across stream disable/enable");
+ 
+ #define POLLING_SLEEP_US			1000
+ #define POLLING_TIMEOUT_US			10000
+@@ -2022,6 +2027,57 @@
+ 	ctrl->dsc_configured = false;
+ }
+ 
++int msm_dp_ctrl_a14_sink_power(struct msm_dp_ctrl *msm_dp_ctrl, bool on)
++{
++	struct msm_dp_ctrl_private *ctrl = container_of(msm_dp_ctrl,
++		struct msm_dp_ctrl_private, msm_dp_ctrl);
++	u8 power, requested;
++	int ret;
++
++	if (!a14_dp_sink_power_test ||
++	    !msm_dp_ctrl_a14_wake_enabled(msm_dp_ctrl))
++		return 0;
++	if (ctrl->panel->dpcd[DP_DPCD_REV] < 0x11 ||
++	    ctrl->panel->dpcd[DP_DPCD_REV] == 0xff ||
++	    ctrl->link->sink_request & DP_TEST_LINK_PHY_TEST_PATTERN)
++		return 0;
++
++	/* Called while AUX is initialized; never bypass its disconnect guard. */
++	if (!on)
++		msm_dp_ctrl_dsc_stop(ctrl);
++
++	ret = drm_dp_dpcd_readb(ctrl->aux, DP_SET_POWER, &power);
++	if (ret != 1)
++		goto fail;
++	requested = (power & ~DP_SET_POWER_MASK) |
++		(on ? DP_SET_POWER_D0 : DP_SET_POWER_D3);
++	ret = drm_dp_dpcd_writeb(ctrl->aux, DP_SET_POWER, requested);
++	if (ret != 1)
++		goto fail;
++
++	if (on) {
++		usleep_range(1000, 2000);
++		ret = drm_dp_dpcd_readb(ctrl->aux, DP_SET_POWER, &power);
++		if (ret != 1)
++			goto fail;
++		if ((power & DP_SET_POWER_MASK) != DP_SET_POWER_D0) {
++			ret = -EIO;
++			goto fail;
++		}
++		dev_info(ctrl->dev, "A14-DP-power: D0 verified before sink check\n");
++	} else {
++		/* No read after D3: the receiver is allowed to go to sleep. */
++		dev_info(ctrl->dev, "A14-DP-power: D3 write accepted before PHY shutdown\n");
++	}
++	return 0;
++fail:
++	if (ret >= 0)
++		ret = -EIO;
++	dev_warn(ctrl->dev, "A14-DP-power: D%u request failed=%d\n",
++		 on ? 0 : 3, ret);
++	return ret;
++}
++
+ static int msm_dp_ctrl_a14_prepare_sink(struct msm_dp_ctrl_private *ctrl)
+ {
+ 	u8 power;
+--- a/drivers/gpu/drm/msm/dp/dp_ctrl.h
++++ b/drivers/gpu/drm/msm/dp/dp_ctrl.h
+@@ -18,6 +18,7 @@
+ 
+ bool msm_dp_ctrl_a14_wake_enabled(struct msm_dp_ctrl *msm_dp_ctrl);
+ bool msm_dp_ctrl_a14_edp_retry_enabled(struct msm_dp_ctrl *msm_dp_ctrl);
++int msm_dp_ctrl_a14_sink_power(struct msm_dp_ctrl *msm_dp_ctrl, bool on);
+ int msm_dp_ctrl_on_link(struct msm_dp_ctrl *msm_dp_ctrl);
+ int msm_dp_ctrl_on_stream(struct msm_dp_ctrl *msm_dp_ctrl, bool force_link_train);
+ void msm_dp_ctrl_off_link_stream(struct msm_dp_ctrl *msm_dp_ctrl);
+--- a/drivers/gpu/drm/msm/dp/dp_display.c
++++ b/drivers/gpu/drm/msm/dp/dp_display.c
+@@ -723,6 +723,10 @@
+ 		 * unplugged interrupt
+ 		 * dongle unplugged out of DUT
+ 		 */
++		/* Connected screen blank/modeset: let the receiver sleep first. */
++		if (READ_ONCE(dp->plugged))
++			msm_dp_ctrl_a14_sink_power(dp->ctrl, false);
++		/* A failed D3 request must not prevent host shutdown. */
+ 		msm_dp_ctrl_off(dp->ctrl);
+ 		msm_dp_display_host_phy_exit(dp);
+ 	}
+@@ -1541,9 +1545,11 @@
+ 	}
+ 
+ 	if (!dp->is_edp && !dp->power_on &&
+-	    of_device_is_compatible(dp->pdev->dev.of_node, "qcom,glymur-dp") &&
+-	    READ_ONCE(a14_check_sink_before_link)) {
+-		rc = msm_dp_a14_check_sink(msm_dp_display);
++	    of_device_is_compatible(dp->pdev->dev.of_node, "qcom,glymur-dp")) {
++		/* D0 must precede the capability preflight after an explicit D3. */
++		rc = msm_dp_ctrl_a14_sink_power(msm_dp_display->ctrl, true);
++		if (!rc && READ_ONCE(a14_check_sink_before_link))
++			rc = msm_dp_a14_check_sink(msm_dp_display);
+ 		if (rc) {
+ 			dev_warn(&dp->pdev->dev,
+ 				 "A14-DP: link enable skipped after sink check rc=%d\n", rc);

@@ -99,3 +99,15 @@
 		compatible = "qcom,qcc2072-bt";
 	};
 };
+
+/* BEGIN A14 dock host-default experiment v2 */
+&{/soc@0/usb@a600000} {
+	role-switch-default-mode = "host";
+};
+/* END A14 dock host-default experiment v2 */
+
+/* BEGIN A14 dock USB Gen1 experiment v1 */
+&{/soc@0/usb@a600000} {
+	maximum-speed = "super-speed";
+};
+/* END A14 dock USB Gen1 experiment v1 */

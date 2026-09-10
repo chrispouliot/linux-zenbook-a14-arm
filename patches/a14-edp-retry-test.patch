@@ -1,0 +1,185 @@
+--- a/drivers/gpu/drm/msm/dp/dp_ctrl.c
++++ b/drivers/gpu/drm/msm/dp/dp_ctrl.c
+@@ -34,6 +34,11 @@
+ MODULE_PARM_DESC(a14_dp_dsc_wake_test,
+ 	"Test A14 port-one DSC teardown and checked receiver setup on wake");
+ 
++static bool a14_edp_retry_test;
++module_param(a14_edp_retry_test, bool, 0444);
++MODULE_PARM_DESC(a14_edp_retry_test,
++	"Test bounded A14 internal-panel training retries without insufficient fallback");
++
+ #define POLLING_SLEEP_US			1000
+ #define POLLING_TIMEOUT_US			10000
+ 
+@@ -138,6 +143,44 @@
+ 		of_machine_is_compatible("asus,zenbook-a14-ux3407na") &&
+ 		of_device_is_compatible(ctrl->dev->of_node, "qcom,glymur-dp") &&
+ 		!strcmp(dev_name(ctrl->dev), "af54000.displayport-controller");
++}
++
++bool msm_dp_ctrl_a14_edp_retry_enabled(struct msm_dp_ctrl *msm_dp_ctrl)
++{
++	struct msm_dp_ctrl_private *ctrl = container_of(msm_dp_ctrl,
++		struct msm_dp_ctrl_private, msm_dp_ctrl);
++
++	return a14_edp_retry_test &&
++		of_machine_is_compatible("asus,zenbook-a14-ux3407na") &&
++		of_device_is_compatible(ctrl->dev->of_node, "qcom,glymur-dp") &&
++		!strcmp(dev_name(ctrl->dev), "af6c000.displayport-controller");
++}
++
++static bool msm_dp_ctrl_a14_edp_native(struct msm_dp_ctrl_private *ctrl)
++{
++	const struct drm_display_mode *mode = &ctrl->panel->msm_dp_mode.drm_mode;
++
++	/* Keep this experiment on the captured uncompressed native panel mode. */
++	return msm_dp_ctrl_a14_edp_retry_enabled(&ctrl->msm_dp_ctrl) &&
++		!(ctrl->link->sink_request & DP_TEST_LINK_PHY_TEST_PATTERN) &&
++		!DP_DSC_PANEL_EN(ctrl->panel) &&
++		!ctrl->panel->msm_dp_mode.out_fmt_is_yuv_420 &&
++		ctrl->panel->msm_dp_mode.bpp == 24 &&
++		mode->hdisplay == 1920 && mode->vdisplay == 1200 &&
++		mode->clock == 154260 &&
++		ctrl->panel->link_info.rate == 270000 &&
++		ctrl->panel->link_info.num_lanes == 2;
++}
++
++static bool msm_dp_ctrl_a14_edp_link_fits(struct msm_dp_ctrl_private *ctrl)
++{
++	/* Full mode clock: wide-bus halves the interface clock, not payload. */
++	u64 required = (u64)ctrl->panel->msm_dp_mode.drm_mode.clock *
++		ctrl->panel->msm_dp_mode.bpp;
++	u64 available = (u64)ctrl->link->link_params.rate *
++		ctrl->link->link_params.num_lanes * 8;
++
++	return required && required <= available;
+ }
+ 
+ /*
+@@ -2279,6 +2322,48 @@
+ 	return 0;
+ }
+ 
++/* Caller selects this only for the gated native two-lane eDP mode. */
++static int msm_dp_ctrl_a14_edp_train(struct msm_dp_ctrl_private *ctrl,
++				     bool reinitialize)
++{
++	unsigned int training_step;
++	int attempt, ret;
++
++	/* Never restart a video stream on the invalid one-lane fallback. */
++	if (!msm_dp_ctrl_a14_edp_link_fits(ctrl))
++		return -ENOSPC;
++
++	for (attempt = 1; attempt <= 3; attempt++) {
++		ctrl->link->phy_params.v_level = 0;
++		ctrl->link->phy_params.p_level = 0;
++		training_step = DP_TRAINING_NONE;
++		ret = msm_dp_ctrl_setup_main_link(ctrl, &training_step);
++		dev_info(ctrl->dev,
++			 "A14-eDP-retry: attempt=%d rate=%u lanes=%u step=%u rc=%d\n",
++			 attempt, ctrl->link->link_params.rate,
++			 ctrl->link->link_params.num_lanes, training_step, ret);
++		if (!ret)
++			return 0;
++
++		msm_dp_ctrl_clear_training_pattern(ctrl, DP_PHY_DPRX);
++		if (attempt == 3 || training_step == DP_TRAINING_NONE ||
++		    !msm_dp_aux_is_link_connected(ctrl->aux))
++			return ret;
++
++		/* Retain the rate/lane count; neither fallback fits this mode. */
++		if (reinitialize) {
++			ret = msm_dp_ctrl_reinitialize_mainlink(ctrl);
++			if (ret)
++				return ret;
++		} else {
++			/* Pixel clocks may be live during retrain/maintenance. */
++			msleep(20);
++		}
++	}
++
++	return -ETIMEDOUT;
++}
++
+ static int msm_dp_ctrl_link_maintenance(struct msm_dp_ctrl_private *ctrl)
+ {
+ 	int ret = 0;
+@@ -2289,7 +2374,10 @@
+ 	ctrl->link->phy_params.p_level = 0;
+ 	ctrl->link->phy_params.v_level = 0;
+ 
+-	ret = msm_dp_ctrl_setup_main_link(ctrl, &training_step);
++	if (msm_dp_ctrl_a14_edp_native(ctrl))
++		ret = msm_dp_ctrl_a14_edp_train(ctrl, false);
++	else
++		ret = msm_dp_ctrl_setup_main_link(ctrl, &training_step);
+ 	if (ret)
+ 		goto end;
+ 
+@@ -2601,6 +2689,11 @@
+ 		}
+ 	}
+ 
++	if (msm_dp_ctrl_a14_edp_native(ctrl)) {
++		rc = msm_dp_ctrl_a14_edp_train(ctrl, !ctrl->stream_clks_on);
++		goto training_done;
++	}
++
+ 	while (--link_train_max_retries) {
+ 		training_step = DP_TRAINING_NONE;
+ 		rc = msm_dp_ctrl_setup_main_link(ctrl, &training_step);
+@@ -2693,6 +2786,9 @@
+ {
+ 	int training_step = DP_TRAINING_NONE;
+ 
++	if (msm_dp_ctrl_a14_edp_native(ctrl))
++		return msm_dp_ctrl_a14_edp_train(ctrl, false);
++
+ 	return msm_dp_ctrl_setup_main_link(ctrl, &training_step);
+ }
+ 
+@@ -2822,6 +2918,12 @@
+ 
+ 	ctrl = container_of(msm_dp_ctrl, struct msm_dp_ctrl_private, msm_dp_ctrl);
+ 
++	if (msm_dp_ctrl_a14_edp_native(ctrl) &&
++	    !msm_dp_ctrl_a14_edp_link_fits(ctrl)) {
++		dev_err(ctrl->dev, "A14-eDP-retry: rejecting insufficient trained link\n");
++		return -ENOSPC;
++	}
++
+ 	pixel_rate = pixel_rate_orig = ctrl->panel->msm_dp_mode.drm_mode.clock;
+ 
+ 	if (msm_dp_ctrl->wide_bus_en || ctrl->panel->msm_dp_mode.out_fmt_is_yuv_420)
+--- a/drivers/gpu/drm/msm/dp/dp_ctrl.h
++++ b/drivers/gpu/drm/msm/dp/dp_ctrl.h
+@@ -17,6 +17,7 @@
+ struct phy;
+ 
+ bool msm_dp_ctrl_a14_wake_enabled(struct msm_dp_ctrl *msm_dp_ctrl);
++bool msm_dp_ctrl_a14_edp_retry_enabled(struct msm_dp_ctrl *msm_dp_ctrl);
+ int msm_dp_ctrl_on_link(struct msm_dp_ctrl *msm_dp_ctrl);
+ int msm_dp_ctrl_on_stream(struct msm_dp_ctrl *msm_dp_ctrl, bool force_link_train);
+ void msm_dp_ctrl_off_link_stream(struct msm_dp_ctrl *msm_dp_ctrl);
+--- a/drivers/gpu/drm/msm/dp/dp_display.c
++++ b/drivers/gpu/drm/msm/dp/dp_display.c
+@@ -1559,14 +1559,15 @@
+ 	rc = msm_dp_ctrl_on_link(msm_dp_display->ctrl);
+ 	if (rc) {
+ 		DRM_ERROR("Failed link training (rc=%d)\n", rc);
+-		if (msm_dp_ctrl_a14_wake_enabled(msm_dp_display->ctrl)) {
++		if (msm_dp_ctrl_a14_wake_enabled(msm_dp_display->ctrl) ||
++		    msm_dp_ctrl_a14_edp_retry_enabled(msm_dp_display->ctrl)) {
+ 			/* on_link has shut down its failed training attempt. */
+ 			if (aux_initialized_here)
+ 				msm_dp_display_host_phy_exit(msm_dp_display);
+ 			msm_dp_display->a14_enable_aborted = true;
+ 			pm_runtime_put_sync(&dp->pdev->dev);
+ 			dev_warn(&dp->pdev->dev,
+-				 "A14-DSC-wake: failed enable resources released\n");
++				 "A14-DP: failed enable resources released\n");
+ 		}
+ 		// TODO: schedule drm_connector_set_link_status_property()
+ 		return;

@@ -1,0 +1,278 @@
+--- a/drivers/gpu/drm/msm/dp/dp_display.c
++++ b/drivers/gpu/drm/msm/dp/dp_display.c
+@@ -39,6 +39,16 @@
+ MODULE_PARM_DESC(a14_check_sink_before_link,
+                 "A14 test: require a live AUX sink before external DP link enable");
+ 
++static bool a14_dp_first_aux_probe_test;
++module_param(a14_dp_first_aux_probe_test, bool, 0444);
++MODULE_PARM_DESC(a14_dp_first_aux_probe_test,
++	"Probe LTTPR range before A14 port-one receiver access on inactive starts");
++
++static bool a14_edp_bpp_init_test;
++module_param(a14_edp_bpp_init_test, bool, 0444);
++MODULE_PARM_DESC(a14_edp_bpp_init_test,
++	"Recompute A14 eDP depth from the requested bpp after powered capability reads");
++
+ #define HPD_STRING_SIZE 30
+ 
+ enum {
+@@ -62,6 +72,7 @@
+ 
+ 	/* An AUX preflight failure already released the enable PM reference. */
+ 	bool a14_enable_aborted;
++	u32 a14_requested_bpp;
+ 
+ 	struct mutex plugged_lock;
+ 	bool plugged;
+@@ -274,6 +285,31 @@
+ }
+ 
+ 
++/*
++ * Call only after runtime resume, PHY initialization and AUX enablement.
++ * Use probe(), not readb(): readb() can prepend an access to 0x102.
++ * This follows the LTTPR-before-DPRX ordering in i915. A failed probe is
++ * logged, but does not prevent the existing receiver detection path.
++ */
++static void msm_dp_a14_first_aux_probe(struct msm_dp_display_private *dp,
++				     const char *phase)
++{
++	struct device *dev = &dp->msm_dp_display.pdev->dev;
++	int ret;
++
++	if (!a14_dp_first_aux_probe_test || dp->msm_dp_display.is_edp ||
++	    dp->msm_dp_display.power_on ||
++	    !of_machine_is_compatible("asus,zenbook-a14-ux3407na") ||
++	    !of_device_is_compatible(dev->of_node, "qcom,glymur-dp") ||
++	    strcmp(dev_name(dev), "af54000.displayport-controller"))
++		return;
++
++	ret = drm_dp_dpcd_probe(dp->aux,
++			DP_LT_TUNABLE_PHY_REPEATER_FIELD_DATA_STRUCTURE_REV);
++	dev_info(dev, "A14-first-AUX: phase=%s probe=0xf0000 ret=%d core=%u phy=%u\n",
++		 phase, ret, dp->core_initialized, dp->phy_initialized);
++}
++
+ /* A14 diagnostic: recover only a positively identified stale LTTPR mode. */
+ static int a14_dp_read_caps_recover(struct msm_dp_display_private *dp, u8 *dpcd)
+ {
+@@ -324,6 +360,7 @@
+ 	int rc = 0;
+ 	u8 dpcd[DP_RECEIVER_CAP_SIZE];
+ 
++	msm_dp_a14_first_aux_probe(dp, "hpd");
+ 	rc = a14_dp_read_caps_recover(dp, dpcd);
+ 	if (rc)
+ 		goto end;
+@@ -966,6 +1003,7 @@
+ 		goto end;
+ 	}
+ 
++	msm_dp_a14_first_aux_probe(priv, "detect");
+ 	ret = drm_dp_read_dpcd_caps(priv->aux, dpcd);
+ 	if (ret) {
+ 		DRM_DEBUG_DP("failed to read caps\n");
+@@ -1510,6 +1548,50 @@
+ 	return 0;
+ }
+ 
++static bool msm_dp_a14_edp_bpp_enabled(struct msm_dp_display_private *dp)
++{
++	struct device *dev = &dp->msm_dp_display.pdev->dev;
++
++	return a14_edp_bpp_init_test && dp->msm_dp_display.is_edp &&
++		of_machine_is_compatible("asus,zenbook-a14-ux3407na") &&
++		of_device_is_compatible(dev->of_node, "qcom,glymur-dp") &&
++		!strcmp(dev_name(dev), "af6c000.displayport-controller") &&
++		!dp->panel->video_test;
++}
++
++/*
++ * eDP mode_set runs before the powered panel capability read. Do not reuse
++ * its bandwidth-reduced depth: retain the original requested depth and
++ * recompute after successful HPD setup, before on_link/on_stream consume it.
++ * This is uncompressed eDP only; no early panel power or invented caps.
++ */
++static int msm_dp_a14_edp_finalize_bpp(struct msm_dp_display_private *dp)
++{
++	struct msm_dp_panel *panel = dp->panel;
++	u32 before = dp->msm_dp_mode->bpp;
++	u64 capacity, required;
++	int ret;
++
++	if (!panel->link_info.rate || !panel->link_info.num_lanes ||
++	    !dp->a14_requested_bpp || panel->dsc_en ||
++	    dp->msm_dp_mode->out_fmt_is_yuv_420)
++		return -EINVAL;
++
++	dp->msm_dp_mode->bpp = dp->a14_requested_bpp;
++	ret = msm_dp_panel_init_panel_info(panel);
++	if (ret)
++		return ret;
++
++	capacity = (u64)panel->link_info.rate * panel->link_info.num_lanes * 8;
++	required = (u64)dp->msm_dp_mode->drm_mode.clock * dp->msm_dp_mode->bpp;
++	dev_info(&dp->msm_dp_display.pdev->dev,
++		 "A14-eDP-bpp: requested=%u before=%u selected=%u rate=%u lanes=%u fits=%u\n",
++		 dp->a14_requested_bpp, before, dp->msm_dp_mode->bpp,
++		 panel->link_info.rate, panel->link_info.num_lanes,
++		 (unsigned int)(required && required <= capacity));
++	return required && required <= capacity ? 0 : -EINVAL;
++}
++
+ void msm_dp_bridge_atomic_enable(struct drm_bridge *drm_bridge,
+ 				 struct drm_atomic_commit *state)
+ {
+@@ -1528,8 +1610,21 @@
+ 		return;
+ 	}
+ 
+-	if (dp->is_edp)
+-		msm_dp_hpd_plug_handle(msm_dp_display);
++	if (dp->is_edp) {
++		rc = msm_dp_hpd_plug_handle(msm_dp_display);
++		if (msm_dp_a14_edp_bpp_enabled(msm_dp_display)) {
++			if (!rc)
++				rc = msm_dp_a14_edp_finalize_bpp(msm_dp_display);
++			if (rc) {
++				dev_err(&dp->pdev->dev,
++					"A14-eDP-bpp: powered setup failed=%d; aborting enable\n", rc);
++				if (msm_dp_display->plugged)
++					msm_dp_hpd_unplug_handle(msm_dp_display);
++				msm_dp_display->a14_enable_aborted = true;
++				return;
++			}
++		}
++	}
+ 
+ 	if (pm_runtime_resume_and_get(&dp->pdev->dev)) {
+ 		DRM_ERROR("failed to pm_runtime_resume\n");
+@@ -1546,6 +1641,7 @@
+ 
+ 	if (!dp->is_edp && !dp->power_on &&
+ 	    of_device_is_compatible(dp->pdev->dev.of_node, "qcom,glymur-dp")) {
++		msm_dp_a14_first_aux_probe(msm_dp_display, "enable");
+ 		/* D0 must precede the capability preflight after an explicit D3. */
+ 		rc = msm_dp_ctrl_a14_sink_power(msm_dp_display->ctrl, true);
+ 		if (!rc && READ_ONCE(a14_check_sink_before_link))
+@@ -1661,6 +1757,9 @@
+ 	if (!msm_dp_display->msm_dp_mode->bpp)
+ 		msm_dp_display->msm_dp_mode->bpp = 24; /* Default bpp */
+ 
++	/* Save before init_panel_info constrains bpp using link capabilities. */
++	msm_dp_display->a14_requested_bpp = msm_dp_display->msm_dp_mode->bpp;
++
+ 	drm_mode_copy(&msm_dp_display->msm_dp_mode->drm_mode, adjusted_mode);
+ 
+ 	msm_dp_display->msm_dp_mode->v_active_low =
+--- a/drivers/gpu/drm/msm/dp/dp_ctrl.c
++++ b/drivers/gpu/drm/msm/dp/dp_ctrl.c
+@@ -54,6 +54,11 @@
+ MODULE_PARM_DESC(a14_dp_sink_cleanup_test,
+ 	"Clear A14 sink DSC/FEC state for uncompressed starts and failed link training");
+ 
++static bool a14_dp_bounded_cleanup_test;
++module_param(a14_dp_bounded_cleanup_test, bool, 0444);
++MODULE_PARM_DESC(a14_dp_bounded_cleanup_test,
++	"Use single-transfer DSC/FEC teardown on A14 port one, stopping on error");
++
+ static bool a14_dp_repeater_restore_test;
+ module_param(a14_dp_repeater_restore_test, bool, 0444);
+ MODULE_PARM_DESC(a14_dp_repeater_restore_test,
+@@ -309,13 +314,13 @@
+ 		msm_dp_ctrl_a14_wake_enabled(&ctrl->msm_dp_ctrl);
+ }
+ 
+-/* Diagnostic only: one native read, no implicit probe or retry loop. */
+-static int msm_dp_ctrl_a14_trace_read(struct drm_dp_aux *aux, unsigned int address,
+-				    u8 *buffer, size_t size, u8 *reply)
++/* One native transfer, no implicit probe or helper retry loop. */
++static int msm_dp_ctrl_a14_single_xfer(struct drm_dp_aux *aux, unsigned int address,
++				     u8 request, u8 *buffer, size_t size, u8 *reply)
+ {
+ 	struct drm_dp_aux_msg msg = {
+ 		.address = address,
+-		.request = DP_AUX_NATIVE_READ,
++		.request = request,
+ 		.reply = 0xff,
+ 		.buffer = buffer,
+ 		.size = size,
+@@ -323,7 +328,8 @@
+ 	int ret;
+ 
+ 	*reply = 0xff;
+-	if (!size || size > DP_AUX_MAX_PAYLOAD_BYTES || !buffer)
++	if (!size || size > DP_AUX_MAX_PAYLOAD_BYTES || !buffer ||
++	    (request != DP_AUX_NATIVE_READ && request != DP_AUX_NATIVE_WRITE))
+ 		return -EINVAL;
+ 	if (aux->is_remote)
+ 		return -EOPNOTSUPP;
+@@ -353,6 +359,49 @@
+ 	}
+  out:
+ 	mutex_unlock(&aux->hw_mutex);
++	return ret;
++}
++
++static int msm_dp_ctrl_a14_trace_read(struct drm_dp_aux *aux, unsigned int address,
++				    u8 *buffer, size_t size, u8 *reply)
++{
++	return msm_dp_ctrl_a14_single_xfer(aux, address, DP_AUX_NATIVE_READ,
++					 buffer, size, reply);
++}
++
++static int msm_dp_ctrl_a14_teardown_sink(struct msm_dp_ctrl_private *ctrl)
++{
++	static const unsigned int addresses[] = { DP_DSC_ENABLE, DP_FEC_CONFIGURATION };
++	u8 value, reply;
++	int i, ret;
++
++	if (!a14_dp_bounded_cleanup_test ||
++	    !msm_dp_ctrl_a14_wake_enabled(&ctrl->msm_dp_ctrl) ||
++	    (ctrl->link->sink_request & DP_TEST_LINK_PHY_TEST_PATTERN))
++		return msm_dp_ctrl_a14_clear_sink(ctrl);
++
++	for (i = 0; i < ARRAY_SIZE(addresses); i++) {
++		value = 0;
++		ret = msm_dp_ctrl_a14_single_xfer(ctrl->aux, addresses[i],
++				DP_AUX_NATIVE_WRITE, &value, 1, &reply);
++		if (ret != 1)
++			goto failed;
++		ret = msm_dp_ctrl_a14_single_xfer(ctrl->aux, addresses[i],
++				DP_AUX_NATIVE_READ, &value, 1, &reply);
++		if (ret != 1)
++			goto failed;
++		if (value) {
++			ret = -EIO;
++			goto failed;
++		}
++	}
++	dev_info(ctrl->dev, "A14-bounded-cleanup: DSC/FEC cleared and verified\n");
++	return 0;
++failed:
++	ret = ret < 0 ? ret : -EIO;
++	dev_info(ctrl->dev,
++		 "A14-bounded-cleanup: stop address=%#x ret=%d reply=%#x; host teardown continues\n",
++		 addresses[i], ret, reply);
+ 	return ret;
+ }
+ 
+@@ -2241,7 +2290,7 @@
+ 	if (!ctrl->dsc_configured)
+ 		return;
+ 	if (msm_dp_ctrl_a14_wake_enabled(&ctrl->msm_dp_ctrl)) {
+-		msm_dp_ctrl_a14_clear_sink(ctrl);
++		msm_dp_ctrl_a14_teardown_sink(ctrl);
+ 	} else if (msm_dp_aux_is_link_connected(ctrl->aux)) {
+ 		drm_dp_dpcd_writeb(ctrl->aux, DP_DSC_ENABLE, 0);
+ 		drm_dp_dpcd_writeb(ctrl->aux, DP_FEC_CONFIGURATION, 0);
+@@ -2360,7 +2409,7 @@
+ 		return;
+ 
+ 	/* AUX is still initialized here; its normal disconnect guards apply. */
+-	ret = msm_dp_ctrl_a14_clear_sink(ctrl);
++	ret = msm_dp_ctrl_a14_teardown_sink(ctrl);
+ 	dev_info(ctrl->dev,
+ 		 "A14-DP-cleanup: failed link error=%d sink clear=%d before PHY shutdown\n",
+ 		 training_error, ret);

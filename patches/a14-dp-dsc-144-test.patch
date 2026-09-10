@@ -1,0 +1,88 @@
+Subject: [EXPERIMENT] drm/msm/dp: extend tested A14 DSC to exact 4K144 mode
+
+Apply after a14-dp-dsc-4k60-test.patch. The 4K60 DSC baseline was confirmed
+working with display and Ethernet on the UX3407NA by its owner.
+Add a separate boot-only gate for the monitor's 1333330 kHz EDID timing.
+Require four-slice decode support. Existing bandwidth, interface-clock,
+DPU-clock and trained-link checks remain in force. No PHY/USB/OPP changes.
+Original 4K60 implementation provenance remains in the preceding patch.
+
+diff --git a/drivers/gpu/drm/msm/dp/dp_panel.c b/drivers/gpu/drm/msm/dp/dp_panel.c
+index 6a066aab3..af8156f3c 100644
+--- a/drivers/gpu/drm/msm/dp/dp_panel.c
++++ b/drivers/gpu/drm/msm/dp/dp_panel.c
+@@ -25,7 +25,13 @@
+ static bool a14_dp_dsc_test;
+ module_param(a14_dp_dsc_test, bool, 0444);
+ MODULE_PARM_DESC(a14_dp_dsc_test,
+-	"Experimental A14 port-one DSC at 3840x2160, 533250 kHz only");
++	"A14 port-one DSC baseline at 3840x2160, 533250 kHz");
++
++/* Separate boot-only gate for the first four-slice/high-clock test. */
++static bool a14_dp_dsc_144_test;
++module_param(a14_dp_dsc_144_test, bool, 0444);
++MODULE_PARM_DESC(a14_dp_dsc_144_test,
++	"Also allow the captured 3840x2160 144 Hz DSC timing on port one");
+ #define DP_INTF_CONFIG_DATABUS_WIDEN     BIT(4)
+ 
+ struct msm_dp_panel_private {
+@@ -255,15 +261,32 @@ static bool msm_dp_panel_a14_dsc_target(struct msm_dp_panel *dp_panel)
+ 		!strcmp(dev_name(panel->dev), "af54000.displayport-controller");
+ }
+ 
+-static bool msm_dp_panel_a14_dsc_mode(const struct drm_display_mode *mode)
++static bool msm_dp_panel_a14_dsc_mode(const struct msm_dp_panel *dp_panel,
++				    const struct drm_display_mode *mode)
+ {
+-	/* Match the captured RGB reduced-blanking timing, not just its clock. */
+-	return mode->clock == 533250 && mode->hdisplay == 3840 &&
+-		mode->hsync_start == 3888 && mode->hsync_end == 3920 &&
+-		mode->htotal == 4000 && mode->vdisplay == 2160 &&
+-		mode->vsync_start == 2163 && mode->vsync_end == 2168 &&
+-		mode->vtotal == 2222 && !(mode->flags &
+-		(DRM_MODE_FLAG_INTERLACE | DRM_MODE_FLAG_DBLSCAN));
++	if (mode->hdisplay != 3840 || mode->vdisplay != 2160 ||
++	    mode->htotal != 4000 || (mode->flags &
++	    (DRM_MODE_FLAG_INTERLACE | DRM_MODE_FLAG_DBLSCAN)))
++		return false;
++
++	/* Retain the tested two-slice 4K60 timing unchanged. */
++	if (mode->clock == 533250 && mode->hsync_start == 3888 &&
++	    mode->hsync_end == 3920 && mode->vsync_start == 2163 &&
++	    mode->vsync_end == 2168 && mode->vtotal == 2222)
++		return true;
++
++	/*
++	 * EDID DisplayID timing: 144.050 Hz, RGB8 -> DSC8, four 960px
++	 * slices (333.333 MP/s per slice). The baseline capability guard
++	 * already requires at least 340 MP/s and >=1920px slice width.
++	 * The existing bandwidth checks require HBR3 x2 for this timing.
++	 */
++	return a14_dp_dsc_144_test &&
++		(dp_panel->dsc_dpcd[DP_DSC_SLICE_CAP_1 - DP_DSC_SUPPORT] &
++		 DP_DSC_4_PER_DP_DSC_SINK) &&
++		mode->clock == 1333330 && mode->hsync_start == 3848 &&
++		mode->hsync_end == 3880 && mode->vsync_start == 2300 &&
++		mode->vsync_end == 2308 && mode->vtotal == 2314;
+ }
+ 
+ static u32 msm_dp_panel_get_supported_bpp(struct msm_dp_panel *dp_panel,
+@@ -277,7 +300,7 @@ static u32 msm_dp_panel_get_supported_bpp(struct msm_dp_panel *dp_panel,
+ 	/* 8 bpp DSC; reserve 3% for FEC plus slice/EOC padding. */
+ 	if (msm_dp_panel_a14_dsc_target(dp_panel) && dp_panel->dsc_en &&
+ 	    mode_edid_bpp >= 24 && link->num_lanes == 2 && link->rate >= 540000 &&
+-	    msm_dp_panel_a14_dsc_mode(mode) &&
++	    msm_dp_panel_a14_dsc_mode(dp_panel, mode) &&
+ 	    (u64)mode->clock * 8 * 103 <= (u64)link_bitrate * 100) {
+ 		*comp_type = MSM_DISPLAY_COMPRESSION_DSC;
+ 		return 24;
+@@ -1537,7 +1560,8 @@ int msm_dp_panel_init_panel_info(struct msm_dp_panel *msm_dp_panel)
+ 	msm_dp_mode->fec_overhead_fp = msm_dp_panel->fec_overhead_fp;
+ 	if (DP_DSC_PANEL_EN(msm_dp_panel))
+ 		dev_info(panel->dev,
+-			 "A14-DSC-test: configured 3840x2160@60 RGB8 DSC8 slices=%u width=%u height=%u pclk=%u\n",
++			 "A14-DSC-test: configured 3840x2160@%u RGB8 DSC8 slices=%u width=%u height=%u pclk=%u\n",
++			 timing->refresh_rate,
+ 			 comp_info->msm_dsc_info.drm_dsc.slice_count,
+ 			 comp_info->msm_dsc_info.drm_dsc.slice_width,
+ 			 comp_info->msm_dsc_info.drm_dsc.slice_height,

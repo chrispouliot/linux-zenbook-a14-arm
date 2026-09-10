@@ -1,0 +1,140 @@
+Subject: [EXPERIMENT] drm/msm/dp: recover A14 native AUX timeouts with Type-C HPD
+
+Apply after the DSC wake patch, with a14-dp-lttpr-wake-test.patch REMOVED.
+Default-off module gate, UX3407NA af54000 controller only. Existing AUX
+connection/runtime-PM/init guards are retained. Reset the AUX engine after
+native software-completion or hardware-reported timeouts while enabled;
+return the error to existing bounded callers. No new retry loop, no new PHY
+calibration, no repeater mode writes or USB reset. Log the timeout source.
+
+--- a/drivers/gpu/drm/msm/dp/dp_aux.c
++++ b/drivers/gpu/drm/msm/dp/dp_aux.c
+@@ -5,6 +5,8 @@
+ 
+ #include <linux/delay.h>
+ #include <linux/iopoll.h>
++#include <linux/moduleparam.h>
++#include <linux/of.h>
+ #include <linux/phy/phy.h>
+ #include <linux/string.h>
+ #include <drm/display/drm_dp_helper.h>
+@@ -13,6 +15,11 @@
+ #include "dp_reg.h"
+ #include "dp_aux.h"
+ 
++static bool a14_dp_aux_wake_test;
++module_param(a14_dp_aux_wake_test, bool, 0444);
++MODULE_PARM_DESC(a14_dp_aux_wake_test,
++	"Reset A14 dock AUX after native transaction timeouts with Type-C HPD");
++
+ enum msm_dp_aux_err {
+ 	DP_AUX_ERR_NONE,
+ 	DP_AUX_ERR_ADDR,
+@@ -35,6 +42,7 @@
+ 
+ 	enum msm_dp_aux_err aux_error_num;
+ 	u32 retry_cnt;
++	u32 a14_last_isr;
+ 	bool cmd_busy;
+ 	bool native;
+ 	bool read;
+@@ -49,6 +57,14 @@
+ 	struct drm_dp_aux msm_dp_aux;
+ };
+ 
++static bool msm_dp_aux_a14_wake_enabled(struct msm_dp_aux_private *aux)
++{
++	return a14_dp_aux_wake_test && !aux->is_edp &&
++		of_machine_is_compatible("asus,zenbook-a14-ux3407na") &&
++		of_device_is_compatible(aux->dev->of_node, "qcom,glymur-dp") &&
++		!strcmp(dev_name(aux->dev), "af54000.displayport-controller");
++}
++
+ static inline u32 msm_dp_read_aux(struct msm_dp_aux_private *aux, u32 offset)
+ {
+ 	return readl_relaxed(aux->aux_base + offset);
+@@ -89,6 +105,27 @@
+ 	msm_dp_write_aux(aux, REG_DP_AUX_CTRL, aux_ctrl);
+ }
+ 
++/* Called with the transfer mutex and runtime-PM reference held. */
++static void msm_dp_aux_a14_recover_timeout(struct msm_dp_aux_private *aux,
++					 struct drm_dp_aux_msg *msg,
++					 bool completion_timeout)
++{
++	/* Respect the existing software disconnect gate, not native HPD alone. */
++	if (!aux->initted || !READ_ONCE(aux->enable_xfers))
++		return;
++
++	dev_warn(aux->dev,
++		 "A14-AUX-wake: timeout addr=%#x request=%#x size=%zu completion=%u isr=%#x error=%u native_hpd=%u; reset AUX\n",
++		 msg->address, msg->request, msg->size, completion_timeout,
++		 READ_ONCE(aux->a14_last_isr), aux->aux_error_num,
++		 msm_dp_aux_is_link_connected(&aux->msm_dp_aux));
++	/* The failed command must not complete a later transfer. */
++	WRITE_ONCE(aux->cmd_busy, false);
++	msm_dp_write_aux(aux, REG_DP_AUX_TRANS_CTRL, 0);
++	msm_dp_aux_reset(aux);
++	msm_dp_aux_clear_hw_interrupts(aux);
++}
++
+ static void msm_dp_aux_enable(struct msm_dp_aux_private *aux)
+ {
+ 	u32 aux_ctrl;
+@@ -349,6 +386,8 @@
+ 			       struct drm_dp_aux_msg *msg)
+ {
+ 	ssize_t ret;
++	bool a14_recovery = false;
++	bool completion_timeout = false;
+ 	int const aux_cmd_native_max = 16;
+ 	int const aux_cmd_i2c_max = 128;
+ 	struct msm_dp_aux_private *aux;
+@@ -393,6 +432,11 @@
+ 		goto exit;
+ 	}
+ 
++	a14_recovery = aux->native && msm_dp_aux_a14_wake_enabled(aux);
++	if (a14_recovery) {
++		WRITE_ONCE(aux->a14_last_isr, 0);
++		aux->aux_error_num = DP_AUX_ERR_NONE;
++	}
+ 	msm_dp_aux_update_offset_and_segment(aux, msg);
+ 	msm_dp_aux_transfer_helper(aux, msg, true);
+ 
+@@ -408,6 +452,7 @@
+ 	}
+ 
+ 	ret = msm_dp_aux_cmd_fifo_tx(aux, msg);
++	completion_timeout = ret == -ETIMEDOUT;
+ 	if (ret < 0) {
+ 		if (aux->native) {
+ 			aux->retry_cnt++;
+@@ -415,7 +460,8 @@
+ 				phy_calibrate(aux->phy);
+ 		}
+ 		/* reset aux if link is in connected state */
+-		if (msm_dp_aux_is_link_connected(msm_dp_aux))
++		if (msm_dp_aux_is_link_connected(msm_dp_aux) &&
++		    !(a14_recovery && completion_timeout))
+ 			msm_dp_aux_reset(aux);
+ 	} else {
+ 		aux->retry_cnt = 0;
+@@ -445,6 +491,9 @@
+ 		}
+ 	}
+ 
++	/* Include IRQ-reported timeouts, not only completion wait expiration. */
++	if (a14_recovery && ret == -ETIMEDOUT)
++		msm_dp_aux_a14_recover_timeout(aux, msg, completion_timeout);
+ 	aux->cmd_busy = false;
+ 
+ exit:
+@@ -465,6 +514,7 @@
+ 
+ 	aux = container_of(msm_dp_aux, struct msm_dp_aux_private, msm_dp_aux);
+ 
++	WRITE_ONCE(aux->a14_last_isr, isr);
+ 	if (!aux->cmd_busy) {
+ 		DRM_ERROR("Unexpected DP AUX IRQ %#010x when not busy\n", isr);
+ 		return IRQ_NONE;

@@ -99,7 +99,7 @@ s += """
 /* ASUS A14 external DP1 HBR diagnostic limit */
 &mdss_dp1_out {
 	/delete-property/ link-frequencies;
-	link-frequencies = /bits/ 64 <1620000000 2700000000>;
+	link-frequencies = /bits/ 64 <1620000000 2700000000 5400000000>;
 };
 """
 
@@ -1319,7 +1319,7 @@ PY
       echo "Verifying ASUS A14 external DP1 HBR limit:"
       sed -n '/ASUS A14 external DP1 HBR diagnostic limit/,/};/p' \
         arch/arm64/boot/dts/qcom/glymur-asus-zenbook-a14-ux3407na.dts | \
-        grep -F 'link-frequencies = /bits/ 64 <1620000000 2700000000>'
+        grep -F 'link-frequencies = /bits/ 64 <1620000000 2700000000 5400000000>'
 
 
       echo
@@ -1785,6 +1785,373 @@ s = s[:start] + part + s[end:]
 p.write_text(s)
 
 PY
+
+      # A14 IRQ-HPD bootstrap correction v1
+      echo "Preserving initial IRQ-tagged HPD during DP setup"
+      python3 - <<'PY'
+from pathlib import Path
+
+def once(s, old, new, label):
+    count = s.count(old)
+    if count != 1:
+        raise SystemExit(f"Expected one {label}, found {count}")
+    return s.replace(old, new, 1)
+
+p = Path("drivers/soc/qcom/pmic_glink_altmode.c")
+s = p.read_text()
+
+# These fields belong only to the serialized per-port worker. Receive-side
+# event snapshots must not overwrite them.
+start = s.index("struct pmic_glink_altmode_port {")
+end = s.index("\n};", start)
+part = s[start:end]
+part = once(part, "\tunsigned int index;\n", """\tunsigned int index;
+
+\t/* A14: successful DP mux/retimer setup, not link-training status. */
+\tbool a14_dp_configured;
+\tenum typec_orientation a14_dp_orientation;
+\tu8 a14_dp_mode;
+""", "port setup-state fields")
+s = s[:start] + part + s[end:]
+
+# Do not suppress a subsequent IRQ event when mux or retimer setup failed.
+start = s.index("static void pmic_glink_altmode_enable_dp(")
+end = s.index("\nstatic void pmic_glink_altmode_enable_tbt(", start)
+part = s[start:end]
+part = once(part, "\tint ret;\n", "\tint ret;\n\tbool configured = true;\n\n\tport->a14_dp_configured = false;\n", "DP setup bookkeeping")
+for operation, message in [
+    ("typec_mux_set(port->typec_mux, &port->state)", "failed to switch mux to DP"),
+    ("typec_retimer_set(port->typec_retimer, &port->retimer_state)", "failed to setup retimer to DP"),
+]:
+    old = f'\tret = {operation};\n\tif (ret)\n\t\tdev_err(altmode->dev, "{message}: %d\\n", ret);'
+    new = f'\tret = {operation};\n\tif (ret) {{\n\t\tconfigured = false;\n\t\tdev_err(altmode->dev, "{message}: %d\\n", ret);\n\t}}'
+    part = once(part, old, new, message)
+part = once(part, "\n}\n", """
+\tif (configured && hpd_state &&
+\t    port->orientation != TYPEC_ORIENTATION_NONE) {
+\t\tport->a14_dp_orientation = port->orientation;
+\t\tport->a14_dp_mode = mode;
+\t\tport->a14_dp_configured = true;
+\t}
+}
+""", "DP setup success tracking")
+s = s[:start] + part + s[end:]
+
+start = s.index("static void pmic_glink_altmode_handle_event(")
+end = s.index("\nstatic void pmic_glink_altmode_worker(", start)
+part = s[start:end]
+part = once(part,
+    "\ttypec_switch_set(alt_port->typec_switch, alt_port->orientation);",
+    """\t/* A changed or disconnected path requires a fresh DP setup. */
+\tif (alt_port->svid != USB_TYPEC_DP_SID ||
+\t    !alt_port->hpd_state ||
+\t    alt_port->mux_ctrl == MUX_CTRL_STATE_NO_CONN ||
+\t    alt_port->orientation == TYPEC_ORIENTATION_NONE ||
+\t    alt_port->a14_dp_orientation != alt_port->orientation ||
+\t    alt_port->a14_dp_mode != alt_port->mode)
+\t\talt_port->a14_dp_configured = false;
+
+\ttypec_switch_set(alt_port->typec_switch, alt_port->orientation);""",
+    "setup-state invalidation")
+part = once(part,
+    "\t    alt_port->hpd_irq) {",
+    "\t    alt_port->hpd_irq && alt_port->a14_dp_configured) {",
+    "IRQ suppression guard")
+part = once(part,
+    "\t/*\n\t * MUX_CTRL_STATE_DP4LN/USB3_DP may only be set if SVID=DP, but we need",
+    """\tif (alt_port->index == 1 &&
+\t    alt_port->svid == USB_TYPEC_DP_SID &&
+\t    alt_port->mux_ctrl != MUX_CTRL_STATE_NO_CONN &&
+\t    alt_port->hpd_state && alt_port->hpd_irq &&
+\t    !alt_port->a14_dp_configured)
+\t\tdev_info_ratelimited(altmode->dev,
+\t\t\t"A14-DP: accepting IRQ-tagged HPD for initial DP setup port=%u\\n",
+\t\t\talt_port->index);
+
+\t/*
+\t * MUX_CTRL_STATE_DP4LN/USB3_DP may only be set if SVID=DP, but we need""",
+    "initial IRQ-HPD diagnostic")
+part = part.replace(
+    "\t * notifications on the observed external-DP port while preserving\n\t * HPD-high plug and HPD-low unplug notifications.",
+    "\t * notifications only after successful DP mux/retimer setup. Initial\n\t * HPD-high may carry IRQ_HPD too; it must reach the setup/notify path.")
+s = s[:start] + part + s[end:]
+p.write_text(s)
+
+PY
+
+      # A14 Glymur USB-DP lifecycle correction v1
+      echo "Correcting Glymur DP-only USB lifecycle"
+      python3 - <<'PY'
+from pathlib import Path
+
+def once(s, old, new, label):
+    n = s.count(old)
+    if n != 1:
+        raise SystemExit(f"Expected one {label}, found {n}")
+    return s.replace(old, new, 1)
+
+p = Path("drivers/phy/qualcomm/phy-qcom-qmp-combo.c")
+s = p.read_text()
+
+# usb_init_count tracks successful USB-consumer init/exit pairs. A mux
+# transition must not release a reference still owned by the USB driver.
+start = s.index("static int qmp_combo_typec_mux_set(")
+end = s.index("\nstatic void qmp_combo_typec_switch_unregister(", start)
+part = s[start:end]
+part = once(part,
+    """\t\tif (new_mode == QMPPHY_MODE_DP_ONLY) {
+\t\t\tif (qmp->usb_init_count)
+\t\t\t\tqmp->usb_init_count--;
+\t\t}
+
+\t\tif (new_mode == QMPPHY_MODE_USB3DP || new_mode == QMPPHY_MODE_USB3_ONLY) {
+\t\t\tqmp_combo_usb_power_on(qmp->usb_phy);
+\t\t\tif (!qmp->usb_init_count)
+\t\t\t\tqmp->usb_init_count++;
+\t\t}""",
+    """\t\tif (cfg == &glymur_usb3dpphy_cfg) {
+\t\t\t/* Lane routing does not acquire/release USB client references. */
+\t\t\tif (qmp->usb_init_count &&
+\t\t\t    new_mode != QMPPHY_MODE_DP_ONLY)
+\t\t\t\tqmp_combo_usb_power_on(qmp->usb_phy);
+\t\t\tdev_info(qmp->dev,
+\t\t\t\t "A14-DP: mux preserves USB refs init=%d usb_init=%u dp_init=%u mode=%u\\n",
+\t\t\t\t qmp->init_count, qmp->usb_init_count,
+\t\t\t\t qmp->dp_init_count, new_mode);
+\t\t} else {
+\t\t\tif (new_mode == QMPPHY_MODE_DP_ONLY) {
+\t\t\t\tif (qmp->usb_init_count)
+\t\t\t\t\tqmp->usb_init_count--;
+\t\t\t}
+
+\t\t\tif (new_mode == QMPPHY_MODE_USB3DP || new_mode == QMPPHY_MODE_USB3_ONLY) {
+\t\t\t\tqmp_combo_usb_power_on(qmp->usb_phy);
+\t\t\t\tif (!qmp->usb_init_count)
+\t\t\t\t\tqmp->usb_init_count++;
+\t\t\t}
+\t\t}""",
+    "Glymur mux reference accounting")
+s = s[:start] + part + s[end:]
+
+# Four-lane DP deliberately holds USB3 PCS in reset. USB consumers may
+# retain/acquire their common-resource reference, but must not program USB3
+# lane registers, start its SerDes, or poll its readiness in that mode.
+start = s.index("static int qmp_combo_usb_power_on(struct phy *phy)\n{")
+end = s.index("\nstatic int qmp_combo_usb_power_off(struct phy *phy)\n{", start)
+part = s[start:end]
+part = once(part,
+    "\tqmp_configure(qmp->dev, serdes, cfg->serdes_tbl, cfg->serdes_tbl_num);",
+    """\tif (cfg == &glymur_usb3dpphy_cfg &&
+\t    qmp->qmpphy_mode == QMPPHY_MODE_DP_ONLY) {
+\t\tdev_info(qmp->dev,
+\t\t\t "A14-DP: USB3 startup skipped in DP-only mode; common reference retained\\n");
+\t\treturn 0;
+\t}
+
+\tqmp_configure(qmp->dev, serdes, cfg->serdes_tbl, cfg->serdes_tbl_num);""",
+    "DP-only USB3 startup guard")
+
+# qmp_combo_com_init() owns the pipe-clock enable. Its matching common
+# teardown releases it on USB-init failure; do not release it twice here.
+part = once(part,
+    "err_disable_pipe_clk:\n\tclk_disable_unprepare(qmp->pipe_clk);",
+    """err_disable_pipe_clk:
+\t/* Glymur: leave common-clock ownership with com_init/com_exit. */
+\tif (cfg != &glymur_usb3dpphy_cfg)
+\t\tclk_disable_unprepare(qmp->pipe_clk);""",
+    "Glymur USB failure clock ownership")
+s = s[:start] + part + s[end:]
+
+start = s.index("static int qmp_combo_usb_power_off(struct phy *phy)\n{")
+end = s.index("\nstatic int qmp_combo_usb_init(", start)
+part = s[start:end]
+part = once(part,
+    "\t/* PHY reset */",
+    """\tif (cfg == &glymur_usb3dpphy_cfg &&
+\t    qmp->qmpphy_mode == QMPPHY_MODE_DP_ONLY) {
+\t\tdev_info(qmp->dev,
+\t\t\t "A14-DP: USB3 stop skipped in DP-only mode; consumer exit remains balanced\\n");
+\t\treturn 0;
+\t}
+
+\t/* PHY reset */""",
+    "DP-only USB3 stop guard")
+s = s[:start] + part + s[end:]
+
+p.write_text(s)
+
+PY
+
+      # A14 Glymur Type-C boot mode correction v1
+      echo "Applying A14 dock boot-mode experiment"
+      python3 - <<'PY'
+from pathlib import Path
+
+p = Path("drivers/phy/qualcomm/phy-qcom-qmp-combo.c")
+s = p.read_text()
+
+old = """\tif (of_property_present(dev->of_node, "mode-switch") ||
+\t    of_property_present(dev->of_node, "orientation-switch")) {
+\t\tret = qmp_combo_typec_register(qmp);"""
+
+new = """\tif (of_property_present(dev->of_node, "mode-switch") ||
+\t    of_property_present(dev->of_node, "orientation-switch")) {
+\t\t/*
+\t\t * A14 boot experiment: USB3DP is the default cached mode, so a
+\t\t * dock already attached at boot can request USB3DP without
+\t\t * exercising the mux reconfiguration used after reconnect.
+\t\t * Start switchable Glymur ports in USB-only mode and let the
+\t\t * negotiated DP request select the combined or DP-only mode.
+\t\t * Fixed-wired DP/eDP PHYs keep their data-lanes configuration.
+\t\t */
+\t\tif (qmp->cfg == &glymur_usb3dpphy_cfg &&
+\t\t    of_property_present(dev->of_node, "mode-switch")) {
+\t\t\tqmp->qmpphy_mode = QMPPHY_MODE_USB3_ONLY;
+\t\t\tdev_info(dev,
+\t\t\t\t "A14-BOOT: initial Type-C mode USB3_ONLY; waiting for negotiated DP mux\\n");
+\t\t}
+
+\t\tret = qmp_combo_typec_register(qmp);"""
+
+if s.count(old) != 1:
+    raise SystemExit("A14 boot-mode patch: expected one Type-C registration block")
+if "A14-BOOT: initial Type-C mode" in s:
+    raise SystemExit("A14 boot-mode patch: source marker already present")
+
+s = s.replace(old, new, 1)
+if s.count(new) != 1:
+    raise SystemExit("A14 boot-mode patch: verification failed")
+p.write_text(s)
+print("A14 boot-mode patch applied: switchable Glymur PHYs start in USB3_ONLY")
+
+PY
+
+      # A14 external DPCD probe experiment v1
+      echo "Applying A14 external DPCD probe experiment"
+      python3 - <<'PY'
+from pathlib import Path
+
+p = Path("drivers/gpu/drm/msm/dp/dp_aux.c")
+s = p.read_text()
+header = Path("include/drm/display/drm_dp_helper.h").read_text()
+if "drm_dp_dpcd_set_probe(" not in header:
+    raise SystemExit("A14 DPCD experiment: required helper API unavailable")
+
+old = "\tdrm_dp_aux_init(&aux->msm_dp_aux);\n"
+new = old + """
+\t/* A14 diagnostic: test real DPCD reads without the preliminary read. */
+\tif (!is_edp &&
+\t    !strcmp(dev_name(dev), "af54000.displayport-controller")) {
+\t\tdrm_dp_dpcd_set_probe(&aux->msm_dp_aux, false);
+\t\tdev_info(dev,
+\t\t\t "A14-AUX-PROBE: preliminary DPCD read disabled on dock controller\\n");
+\t}
+"""
+if s.count(old) != 1 or "A14-AUX-PROBE:" in s:
+    raise SystemExit("A14 DPCD experiment: unexpected AUX initialization; refusing edit")
+anchor = "#include <drm/drm_print.h>\n"
+if s.count(anchor) != 1:
+    raise SystemExit("A14 DPCD experiment: unexpected include block; refusing edit")
+extra = ""
+for include in ("#include <linux/string.h>\n",
+                "#include <drm/display/drm_dp_helper.h>\n"):
+    if include not in s:
+        extra += include
+s = s.replace(anchor, extra + anchor, 1).replace(old, new, 1)
+p.write_text(s)
+print("A14 DPCD probe experiment applied to af54000 only; AUX errors still propagate")
+
+PY
+
+      # A14 dock repeater recovery experiment v1
+      echo "Applying A14 dock repeater recovery experiment"
+      python3 - <<'PY'
+HELPER = '\n/* A14 diagnostic: recover only a positively identified stale LTTPR mode. */\nstatic int a14_dp_read_caps_recover(struct msm_dp_display_private *dp, u8 *dpcd)\n{\n\tstruct device *dev = &dp->msm_dp_display.pdev->dev;\n\tu8 caps[DP_LTTPR_COMMON_CAP_SIZE] = { 0 };\n\tunsigned int base = DP_LT_TUNABLE_PHY_REPEATER_FIELD_DATA_STRUCTURE_REV;\n\tint original, ret, count;\n\tu8 mode;\n\n\toriginal = drm_dp_read_dpcd_caps(dp->aux, dpcd);\n\tif (!original || dp->msm_dp_display.is_edp ||\n\t    strcmp(dev_name(dev), "af54000.displayport-controller"))\n\t\treturn original;\n\n\tdev_info(dev, "A14-LTTPR: initial caps failed=%d; reading repeater caps\\n",\n\t\t original);\n\tret = drm_dp_dpcd_read_data(dp->aux, base, caps, sizeof(caps));\n\tif (ret < 0) {\n\t\tdev_info(dev, "A14-LTTPR: repeater read failed=%d; no mode write\\n", ret);\n\t\treturn original;\n\t}\n\n\tcount = drm_dp_lttpr_count(caps);\n\tmode = caps[DP_PHY_REPEATER_MODE -\n\t\t    DP_LT_TUNABLE_PHY_REPEATER_FIELD_DATA_STRUCTURE_REV];\n\tdev_info(dev, "A14-LTTPR: caps=%*ph count=%d mode=%#x\\n",\n\t\t (int)sizeof(caps), caps, count, mode);\n\tif (caps[0] < 0x14 || count < 1 || count > 8 ||\n\t    mode != DP_PHY_REPEATER_MODE_NON_TRANSPARENT) {\n\t\tdev_info(dev, "A14-LTTPR: recovery conditions not met; no mode write\\n");\n\t\treturn original;\n\t}\n\n\tret = drm_dp_lttpr_set_transparent_mode(dp->aux, true);\n\tdev_info(dev, "A14-LTTPR: set transparent result=%d\\n", ret);\n\tif (ret)\n\t\treturn original;\n\n\tret = drm_dp_read_dpcd_caps(dp->aux, dpcd);\n\tdev_info(dev, "A14-LTTPR: capability retry result=%d\\n", ret);\n\treturn ret;\n}\n\n'
+from pathlib import Path
+p = Path("drivers/gpu/drm/msm/dp/dp_display.c")
+s = p.read_text()
+header = Path("include/drm/display/drm_dp_helper.h").read_text()
+for api in ("drm_dp_lttpr_count(", "drm_dp_lttpr_set_transparent_mode("):
+    if api not in header:
+        raise SystemExit("A14 repeater experiment: missing helper API " + api)
+anchor = "static int msm_dp_display_process_hpd_high(struct msm_dp_display_private *dp)\n"
+old = "\trc = drm_dp_read_dpcd_caps(dp->aux, dpcd);\n"
+include = "#include <linux/string_choices.h>\n"
+for text in (anchor, old, include):
+    if s.count(text) != 1:
+        raise SystemExit("A14 repeater experiment: missing/duplicate source anchor " + repr(text))
+if "A14-LTTPR:" in s:
+    raise SystemExit("A14 repeater experiment: source already modified")
+if "#include <linux/string.h>\n" not in s:
+    s = s.replace(include, "#include <linux/string.h>\n" + include, 1)
+s = s.replace(old, "\trc = a14_dp_read_caps_recover(dp, dpcd);\n", 1)
+s = s.replace(anchor, HELPER + anchor, 1)
+p.write_text(s)
+print("A14 repeater experiment applied: recovery only after failed dock capability read")
+
+PY
+
+      # BEGIN A14 DSC 4K60 experiment v1
+      # Must follow all existing A14 postPatch transformations.
+      patch --batch --forward --fuzz=0 -p1 < ${./patches/a14-dp-dsc-4k60-test.patch}
+      # END A14 DSC 4K60 experiment v1
+
+      # BEGIN A14 DSC 144Hz extension v1
+      # Follow the hardware-tested 4K60 DSC patch.
+      patch --batch --forward --fuzz=0 -p1 < ${./patches/a14-dp-dsc-144-test.patch}
+      # END A14 DSC 144Hz extension v1
+
+      # BEGIN A14 DSC wake experiment v1
+      patch --batch --forward --fuzz=0 -p1 < ${./patches/a14-dp-dsc-wake-test.patch}
+      # END A14 DSC wake experiment v1
+
+      # BEGIN A14 AUX wake experiment v1
+      patch --batch --forward --fuzz=0 -p1 < ${./patches/a14-dp-aux-wake-test.patch}
+      # END A14 AUX wake experiment v1
+
+      # BEGIN A14 dock HPD experiment v1
+      patch --batch --forward --fuzz=0 -p1 < ${./patches/a14-dock-hpd-test.patch}
+      # END A14 dock HPD experiment v1
+
+      # BEGIN A14 eDP retry experiment v1
+      patch --batch --forward --fuzz=0 -p1 < ${./patches/a14-edp-retry-test.patch}
+      # END A14 eDP retry experiment v1
+
+      # BEGIN A14 paired config experiment v1
+      patch --batch --forward --fuzz=0 -p1 < ${./patches/a14-dp-pair-config-test.patch}
+      # END A14 paired config experiment v1
+
+      # BEGIN A14 sink power experiment v1
+      patch --batch --forward --fuzz=0 -p1 < ${./patches/a14-dp-sink-power-test.patch}
+      # END A14 sink power experiment v1
+
+      # BEGIN A14 state trace experiment v1
+      patch --batch --forward --fuzz=0 -p1 < ${./patches/a14-dp-state-trace-test.patch}
+      # END A14 state trace experiment v1
+
+      # BEGIN A14 config reuse experiment v1
+      patch --batch --forward --fuzz=0 -p1 < ${./patches/a14-dp-config-reuse-test.patch}
+      # END A14 config reuse experiment v1
+
+      # BEGIN A14 repeater restore experiment v1
+      patch --batch --forward --fuzz=0 -p1 < ${./patches/a14-dp-repeater-restore-test.patch}
+      # END A14 repeater restore experiment v1
+
+      # BEGIN A14 sink cleanup experiment v1
+      patch --batch --forward --fuzz=0 -p1 < ${./patches/a14-dp-sink-cleanup-test.patch}
+      # END A14 sink cleanup experiment v1
+
+      # BEGIN A14 review theories experiment v1
+      patch --batch --forward --fuzz=0 -p1 < ${./patches/a14-dp-review-theories-test.patch}
+      # END A14 review theories experiment v1
+
+      # BEGIN A14 repeater reset experiment v1
+      patch --batch --forward --fuzz=0 -p1 < ${./patches/a14-dp-repeater-reset-test.patch}
+      # END A14 repeater reset experiment v1
+
+      # BEGIN A14 transparent experiment v1
+      patch --batch --forward --fuzz=0 -p1 < ${./patches/a14-dp-transparent-test.patch}
+      # END A14 transparent experiment v1
 
       echo "All ASUS A14 kernel patches applied successfully"
     '';

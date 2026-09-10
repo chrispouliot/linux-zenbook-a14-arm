@@ -1,0 +1,87 @@
+diff --git a/drivers/soc/qcom/pmic_glink_altmode.c b/drivers/soc/qcom/pmic_glink_altmode.c
+--- a/drivers/soc/qcom/pmic_glink_altmode.c
++++ b/drivers/soc/qcom/pmic_glink_altmode.c
+@@ -24,6 +24,12 @@
+ 
+ #include <linux/soc/qcom/pmic_glink.h>
+ 
++/* Experimental: extend A14 IRQ-only containment to the dock on Type-C port 0. */
++static bool a14_dock_hpd_test;
++module_param_named(a14_dock_hpd_test, a14_dock_hpd_test, bool, 0444);
++MODULE_PARM_DESC(a14_dock_hpd_test,
++	"A14 port 0: suppress IRQ-only hotplug replay after successful DP setup");
++
+ #define PMIC_GLINK_MAX_PORTS	3
+ 
+ #define USBC_SC8180X_NOTIFY_IND	0x13
+@@ -117,6 +123,7 @@
+ 	bool a14_dp_configured;
+ 	enum typec_orientation a14_dp_orientation;
+ 	u8 a14_dp_mode;
++	u8 a14_dp_mux_ctrl;
+ 
+ 	struct typec_switch *typec_switch;
+ 	struct typec_mux *typec_mux;
+@@ -288,6 +295,7 @@
+ 	    port->orientation != TYPEC_ORIENTATION_NONE) {
+ 		port->a14_dp_orientation = port->orientation;
+ 		port->a14_dp_mode = mode;
++		port->a14_dp_mux_ctrl = port->mux_ctrl;
+ 		port->a14_dp_configured = true;
+ 	}
+ }
+@@ -436,6 +444,9 @@
+ {
+ 	struct pmic_glink_altmode *altmode = alt_port->altmode;
+ 	enum drm_connector_status conn_status;
++	bool dock_hpd = alt_port->index == 0 &&
++		READ_ONCE(a14_dock_hpd_test) &&
++		of_machine_is_compatible("asus,zenbook-a14-ux3407na");
+ 
+ 	dev_info(altmode->dev,
+ 		 "A14-DP: WORK port=%u svid=%#x mux=%u mode=%u hpd=%u irq=%u orientation=%u\n",
+@@ -453,7 +464,8 @@
+ 	    alt_port->mux_ctrl == MUX_CTRL_STATE_NO_CONN ||
+ 	    alt_port->orientation == TYPEC_ORIENTATION_NONE ||
+ 	    alt_port->a14_dp_orientation != alt_port->orientation ||
+-	    alt_port->a14_dp_mode != alt_port->mode)
++	    alt_port->a14_dp_mode != alt_port->mode ||
++	    (dock_hpd && alt_port->a14_dp_mux_ctrl != alt_port->mux_ctrl))
+ 		alt_port->a14_dp_configured = false;
+ 
+ 	typec_switch_set(alt_port->typec_switch, alt_port->orientation);
+@@ -463,19 +475,30 @@
+ 	 * separately from a real connector hotplug. Suppress IRQ-only
+ 	 * notifications only after successful DP mux/retimer setup. Initial
+ 	 * HPD-high may carry IRQ_HPD too; it must reach the setup/notify path.
++	 * The dock experiment adds port 0 on UX3407NA only. Do not mistake a
++	 * changed mux configuration for a duplicate; keep real HPD edges.
++	 * This does not implement sink-service IRQ handling in the old API.
+ 	 */
+-	if (alt_port->index == 1 &&
++	if ((alt_port->index == 1 ||
++	     (dock_hpd &&
++	      (alt_port->mux_ctrl == MUX_CTRL_STATE_DP4LN ||
++	       alt_port->mux_ctrl == MUX_CTRL_STATE_USB3_DP))) &&
+ 	    alt_port->svid == USB_TYPEC_DP_SID &&
+ 	    alt_port->hpd_state &&
+ 	    alt_port->hpd_irq && alt_port->a14_dp_configured) {
+-		dev_info_ratelimited(altmode->dev,
+-			"A14-DP: suppressing port 1 IRQ-only HPD notification\n");
++		if (dock_hpd)
++			dev_info_ratelimited(altmode->dev,
++				"A14-dock-HPD: suppressing IRQ-only replay port=%u mode=%u mux=%u\n",
++				alt_port->index, alt_port->mode, alt_port->mux_ctrl);
++		else
++			dev_info_ratelimited(altmode->dev,
++				"A14-DP: suppressing port 1 IRQ-only HPD notification\n");
+ 		pmic_glink_altmode_request(altmode, ALTMODE_PAN_ACK,
+ 					    alt_port->index);
+ 		return;
+ 	}
+ 
+-	if (alt_port->index == 1 &&
++	if ((alt_port->index == 1 || dock_hpd) &&
+ 	    alt_port->svid == USB_TYPEC_DP_SID &&
+ 	    alt_port->mux_ctrl != MUX_CTRL_STATE_NO_CONN &&
+ 	    alt_port->hpd_state && alt_port->hpd_irq &&
