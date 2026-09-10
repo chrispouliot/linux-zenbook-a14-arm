@@ -81,7 +81,8 @@ consistent with mouse movement; no wake-source policy change was made.
 ## Original display patch order
 
 These patches were applied after all older platform transformations. Their net
-result is now `patches/a14-display-stack.patch`. Original files and intermediate
+result first became `patches/a14-display-stack.patch` and is now the four-patch
+series listed in `README.md` and `series.json`. Original files and intermediate
 states remain available in the user's Git history. Hashes identify the captured
 inputs; they do not pin or modify the user's Git commit.
 
@@ -111,3 +112,38 @@ Module order is unchanged. Each `experiments/a14-NAME/nixos.nix` moved to
 All recorder callers should now use `tools/a14-display-capture.py`.
 Historical notes below `history/` may reference removed paths or superseded
 experiments and should not be followed as current installation instructions.
+
+## Follow-up: cleanup validation and recovery disabled
+
+The owner reported that boot and suspend passed after the first packaging
+cleanup. The personal `hardware.a14DockBootRecovery.enable` option was then set
+to false. The next docked boot worked and reportedly loaded in about five
+seconds, with no recovery grace-period delay. Further recovery-free boots remain
+useful before removing the optional v4 integration entirely. The public repo
+still retains that override and script; the personal option remains disabled.
+
+The v4 delay came from waiting until 30 seconds of uptime before checking dock
+topology. Its service was ordered before GDM and NetworkManager, so the wait
+also delayed undocked startup. No new dock-presence heuristic has been added.
+
+## Follow-up: ordered display series
+
+The combined patch is split at existing historical boundaries:
+
+| New patch | Historical inputs from the table above |
+| --- | --- |
+| `a14-display-dsc.patch` | 1-2: DSC 4K60 and 144 Hz extension |
+| `a14-display-lifecycle.patch` | 3-14: wake/AUX/HPD through repeater-reset diagnostics |
+| `a14-display-transparent-lttpr.patch` | 15: guarded transparent LTTPR |
+| `a14-display-edp-depth.patch` | 16: native eDP depth |
+
+The full series remains required. Splitting for review does not make the
+intermediate driver states suitable for independent deployment. All 38 source
+hashes remain unchanged, including the eDP and transparent-mode implementations.
+The public README's old HBR-only warning and stale kernel.nix line links were
+updated. A verifier now reconstructs the recipe and checks the recorded hashes.
+
+Remaining cleanup: extract older platform rewrites; test individual diagnostic
+removals; review/remove dormant code only with a deliberate source change; and
+separate A14 quirks from potential generic upstream fixes. None of those runtime
+changes is included in the series split.

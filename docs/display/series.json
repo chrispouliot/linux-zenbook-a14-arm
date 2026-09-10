@@ -1,0 +1,90 @@
+{
+  "source_revision": "51231839d5ef007638bd1c3500e6a76b337a66f3",
+  "patches": [
+    {
+      "order": 1,
+      "path": "patches/a14-display-dsc.patch",
+      "original_patches": [
+        "a14-dp-dsc-4k60-test.patch",
+        "a14-dp-dsc-144-test.patch"
+      ],
+      "source_files": [
+        "drivers/gpu/drm/msm/Makefile",
+        "drivers/gpu/drm/msm/disp/dpu1/dpu_dsc_helper.c",
+        "drivers/gpu/drm/msm/disp/dpu1/dpu_dsc_helper.h",
+        "drivers/gpu/drm/msm/disp/dpu1/dpu_encoder.c",
+        "drivers/gpu/drm/msm/disp/dpu1/dpu_encoder.h",
+        "drivers/gpu/drm/msm/disp/dpu1/dpu_encoder_phys.h",
+        "drivers/gpu/drm/msm/disp/dpu1/dpu_encoder_phys_vid.c",
+        "drivers/gpu/drm/msm/disp/dpu1/dpu_hw_dsc_1_2.c",
+        "drivers/gpu/drm/msm/disp/dpu1/dpu_hw_intf.c",
+        "drivers/gpu/drm/msm/disp/dpu1/dpu_hw_intf.h",
+        "drivers/gpu/drm/msm/disp/dpu1/dpu_rm.c",
+        "drivers/gpu/drm/msm/dp/dp_ctrl.c",
+        "drivers/gpu/drm/msm/dp/dp_display.c",
+        "drivers/gpu/drm/msm/dp/dp_panel.c",
+        "drivers/gpu/drm/msm/dp/dp_panel.h",
+        "drivers/gpu/drm/msm/dp/dp_reg.h",
+        "drivers/gpu/drm/msm/dp/dp_tu_calc.c",
+        "drivers/gpu/drm/msm/dp/dp_tu_calc.h",
+        "drivers/gpu/drm/msm/dsi/dsi.c",
+        "drivers/gpu/drm/msm/dsi/dsi.h",
+        "drivers/gpu/drm/msm/dsi/dsi_host.c",
+        "drivers/gpu/drm/msm/msm_drv.h",
+        "drivers/gpu/drm/msm/msm_dsc_helper.h"
+      ],
+      "sha256": "11169da1dc029cbaba0a2cd19029b18f92f37afc09b7453f3412bd21883f2050"
+    },
+    {
+      "order": 2,
+      "path": "patches/a14-display-lifecycle.patch",
+      "original_patches": [
+        "a14-dp-dsc-wake-test.patch",
+        "a14-dp-aux-wake-test.patch",
+        "a14-dock-hpd-test.patch",
+        "a14-edp-retry-test.patch",
+        "a14-dp-pair-config-test.patch",
+        "a14-dp-sink-power-test.patch",
+        "a14-dp-state-trace-test.patch",
+        "a14-dp-config-reuse-test.patch",
+        "a14-dp-repeater-restore-test.patch",
+        "a14-dp-sink-cleanup-test.patch",
+        "a14-dp-review-theories-test.patch",
+        "a14-dp-repeater-reset-test.patch"
+      ],
+      "source_files": [
+        "drivers/gpu/drm/msm/dp/dp_aux.c",
+        "drivers/gpu/drm/msm/dp/dp_ctrl.c",
+        "drivers/gpu/drm/msm/dp/dp_ctrl.h",
+        "drivers/gpu/drm/msm/dp/dp_display.c",
+        "drivers/soc/qcom/pmic_glink_altmode.c"
+      ],
+      "sha256": "d422b61628f45f88cf27c827ab4647a13773ff33e1b3ceb6274f396eceff54e3"
+    },
+    {
+      "order": 3,
+      "path": "patches/a14-display-transparent-lttpr.patch",
+      "original_patches": [
+        "a14-dp-transparent-test.patch"
+      ],
+      "source_files": [
+        "drivers/gpu/drm/msm/dp/dp_ctrl.c",
+        "drivers/gpu/drm/msm/dp/dp_ctrl.h",
+        "drivers/gpu/drm/msm/dp/dp_display.c",
+        "drivers/gpu/drm/msm/dp/dp_link.h"
+      ],
+      "sha256": "d9fa466eeeee5a07a94562225314cd1fc42e26dbd407084657ed5d049ecffb38"
+    },
+    {
+      "order": 4,
+      "path": "patches/a14-display-edp-depth.patch",
+      "original_patches": [
+        "a14-edp-depth-test.patch"
+      ],
+      "source_files": [
+        "drivers/gpu/drm/msm/dp/dp_display.c"
+      ],
+      "sha256": "eda7c7b8fd466c3ecb8cd333627dcc8cfb573196d2ba5a026a801e3436cab586"
+    }
+  ]
+}

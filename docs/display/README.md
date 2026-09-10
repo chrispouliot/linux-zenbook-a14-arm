@@ -1,65 +1,101 @@
 # A14 display stack
 
-This packaging cleanup preserves the working A14 kernel source and runtime
-settings captured in `a14-edp-depth-standby.tar.gz`. It does not claim generic
-DisplayPort support or prove that every retained workaround is necessary.
+This is the tested A14-specific display stack for kernel commit
+`51231839d5ef007638bd1c3500e6a76b337a66f3`. Its latest packaging changes preserve
+all 38 reconstructed kernel source files byte-for-byte. They do not establish
+generic dock compatibility or prove that every retained workaround is needed.
 
-## Layout
+## Layout and patch order
 
-- `kernel.nix`: kernel inputs/configuration and initial platform patches.
-- `kernel/a14-post-patch.nix`: existing platform source transformations, followed
-  by the consolidated display patch. The older inline platform edits remain here
-  verbatim; extracting those into ordinary patches is a separate cleanup.
-- `patches/a14-display-stack.patch`: the final result of sixteen chronological
-  display patches, including DSC and the subsequent lifecycle corrections.
-- `display/default.nix`: one entry point, preserving the old option-module order.
-- `display/options/`: the existing option definitions and module parameters.
-  Names containing `Test` and `_test` intentionally remain compatible.
-- `display/dock-recovery.py`: the unchanged v4 boot recovery implementation.
-- `tools/a14-display-capture.py`: one recorder for all display investigations.
-- `docs/display/HISTORY.md`: decisions, test results, and original patch order.
-- `docs/display/history/`: historical experiment notes, not current instructions.
+`kernel.nix` retains kernel configuration and the initial platform patches.
+`kernel/a14-post-patch.nix` runs the existing platform transformations, followed
+by this display series:
 
-The default flake module imports `./display`. Existing application, firmware,
-audio, USB, SCMI, and base hardware module integration is preserved. No firmware
-input or lock-file change is part of this cleanup.
+| Order | Patch | Purpose |
+| --- | --- | --- |
+| 1 | `patches/a14-display-dsc.patch` | DSC/FEC pipeline, PPS, bandwidth/mode handling, and the 4K144 extension. |
+| 2 | `patches/a14-display-lifecycle.patch` | Wake, AUX, HPD, and link teardown corrections, diagnostics, and gated alternatives. |
+| 3 | `patches/a14-display-transparent-lttpr.patch` | The guarded transparent-repeater path that made the tested dock reliable. |
+| 4 | `patches/a14-display-edp-depth.patch` | Native internal colour-depth finalization after powered capability setup. |
+
+**Apply all four in order.** They are review boundaries, not independent optional
+features. Earlier stages contain intermediate states corrected by later patches.
+The previous `a14-display-stack.patch` is replaced by their combined result.
+`series.json` records the order, hashes, affected files, and historical inputs.
+
+- `display/default.nix`: one module entry point, preserving the original order.
+- `display/options/`: existing option definitions and kernel parameters. Names
+  containing `Test` or `_test` remain compatible with existing configurations.
+- `display/dock-recovery.py`: retained optional userspace boot recovery v4.
+- `tools/a14-display-capture.py`: canonical read-only diagnostic recorder.
+- `tools/a14-verify-display-series.py`: reproducible source comparison.
+- `docs/display/HISTORY.md`: investigation decisions and test results.
+- `docs/display/history/`: historical notes, not current instructions.
+
+The older platform transformations remain verbatim in the postPatch expression.
+Extracting those into ordinary patches, removing diagnostics, and deleting
+obsolete runtime alternatives are separate follow-up changes. Firmware, audio,
+USB, SCMI, flake inputs, and the base hardware module are unchanged by this split.
 
 ## Working configuration
 
-The tested topology is laptop port one -> Amazon Basics TB4/USB4 dock -> USB-C to
-DisplayPort cable -> 4K monitor. The external link has run 3840x2160 at 144 Hz,
-HBR3 with two lanes, DSC at 8 compressed bits/pixel, FEC, and RGB 8-bit source
-colour. The internal display uses 1920x1200 at 60 Hz, HBR with two lanes and
-24 bits/pixel after the eDP depth correction.
+The tested path is laptop port one -> Amazon Basics TB4/USB4 dock -> USB-C to
+DisplayPort cable -> 4K monitor. It has run 3840x2160 at 144 Hz, HBR3 with two
+lanes, DSC at 8 compressed bits/pixel, FEC, and RGB 8-bit source colour. The
+internal panel uses 1920x1200 at 60 Hz, HBR with two lanes and 24 bits/pixel after
+the eDP-depth correction. The second external controller retains an HBR2 cap.
 
-The successful dock change is **transparent LTTPR mode**. This is a DisplayPort
-repeater/link-training mode, not a monitor standby mode. It is selected under the
-existing A14 port-one, inactive-link, two-repeater guards. The physical repeater
-capability limits remain respected. The other wake/lifecycle changes remain.
+Transparent LTTPR is a DisplayPort repeater/link-training mode, not a monitor
+standby mode. It is selected only under the retained A14 port-one, inactive-link,
+and two-repeater guards; physical repeater capability limits remain respected.
+All the other lifecycle corrections remain present.
 
-Recovery v4 stays controlled by the existing
-`hardware.a14DockBootRecovery.enable` option. This module still only overrides
-an already-enabled service; it does not define or turn on that external option.
-The service's timing, topology guards, storage check, reset policy, and boot
-ordering are unchanged. The recovery script's store path changes with its move.
+Repeated dock boot, display standby, full suspend, clamshell standby and replug
+have passed during this investigation. The first packaging cleanup also passed
+boot and suspend on the device. An overnight suspend was reported successful
+before cleanup; no overnight capture was supplied. Other docks, reversed cable
+orientation, and untested configurations remain outside that validation.
 
-No runtime experiments are removed in this pass. In particular, config reuse,
-the explicit repeater-reset experiment, the older eDP-bpp experiment, and bounded
+## Recovery v4 and the personal configuration
+
+After the first cleanup, the owner disabled
+`hardware.a14DockBootRecovery.enable` in the personal NixOS configuration.
+A subsequent docked boot reportedly worked with no recovery delay and loaded in
+about five seconds. This supports testing without v4; it is not a complete
+matrix proving recovery unnecessary for every dock or boot condition.
+
+The repo's v4 module remains available, unchanged. It only overrides an already
+enabled personal recovery service. The original personal v3 module defines the
+option; the public repo does not define or enable it. Keeping the personal
+module imported with this setting disables both service definitions:
+
+```nix
+hardware.a14DockBootRecovery.enable = false;
+```
+
+Do not add this assignment to a configuration that never imported the personal
+module: the option would be undefined. If removing that personal module, remove
+its option assignment too. Disabling recovery does not disable DSC, transparent
+LTTPR, or eDP depth. This installer does not edit `/etc/nixos` or change the
+recovery setting. It does not remove the v4 override, which could otherwise
+expose the older v3 service in a configuration that still enables the option.
+
+Config reuse, explicit repeater reset, older eDP-bpp finalization, and bounded
 sink cleanup retain their disabled settings. AUX/state diagnostics remain on.
-Do not run historical experiment installers against this reorganized tree.
-They expect the old file layout and baseline hashes.
+Historical experiment installers target the old layout and must not be applied
+to this reorganized stack.
 
-## Install and review
+## Install this split
 
-Run the supplied `a14-cleanup-display-stack.py` installer as your normal user:
+Run the supplied installer as your normal user:
 
 ```sh
 nix shell nixpkgs#python3 --command python3 \
-  ~/Downloads/a14-cleanup-display-stack.py \
+  ~/Downloads/a14-split-display-series.py \
   ~/Projects/linux-zenbook-a14-arm --check
 
 nix shell nixpkgs#python3 --command python3 \
-  ~/Downloads/a14-cleanup-display-stack.py \
+  ~/Downloads/a14-split-display-series.py \
   ~/Projects/linux-zenbook-a14-arm
 
 cd ~/Projects/linux-zenbook-a14-arm
@@ -67,63 +103,64 @@ git diff --stat
 git status --short
 ```
 
-The installer checks the exact captured integration, patches, and experiment
-files before changing anything. It leaves unrelated files and the Git index
-alone, creates no backup copy, and refuses a different baseline. `--check`
-performs the same preflight without writing. A second install is a no-op.
-`--remove` restores its exact previous file set, provided the cleanup-owned
-files have not subsequently changed. Git history is also your restore point.
+The installer checks the existing tested cleanup before any edits. It preserves
+unrelated files and the Git index and creates no backup. `--check` is read-only;
+repeating installation is a no-op. `--remove` restores the previous combined
+patch layout if the affected files have not changed. Git history remains the
+long-term restore point. The baseline matches the relevant files in public
+commit `810f28ccb774db5cd5891df64e18fdb9de072bf7`; the installer checks file
+contents, not HEAD, so unrelated commits are allowed.
 
-Stage the specific cleanup paths so the new files are included in the flake:
+Stage the new files so Git-backed flakes can include them, review, then rebuild:
 
 ```sh
-git add -A -- kernel.nix flake.nix kernel patches display tools docs/display experiments
+git add -A -- README.md kernel/a14-post-patch.nix patches docs/display tools/a14-verify-display-series.py
+git diff --cached --stat
+git diff --cached --check
 sudo nix flake update a14 --flake /etc/nixos
 sudo nixos-rebuild boot --flake /etc/nixos#a14
 ```
 
-Review staged changes before committing. The installer does not stage or commit.
-If the old experiment directory contained additional user files, those remain.
-If you directly imported an old experiment module outside this repository,
-update that import to the default flake module or the appropriate module under
-`display/options/`; the default flake import is already migrated.
+The installer does not stage, commit, push, rebuild, or reboot. Nix may rebuild
+the kernel because its patch inputs changed even though the resulting source is
+identical. After a successful build, a normal dock boot and standby/wake check
+provide a practical integration check. Keep recovery disabled during that check
+if it is already disabled; this is not a new recovery experiment.
 
-Nix may rebuild the kernel because its recipe/patch store inputs changed, even
-though the resulting patched C and DT source is identical. This cleanup is not
-an ABI, frequency, pixel-depth, or suspend-behaviour change.
+## Validation
 
-## Verification and the next test
+The four patches apply in order with zero fuzz and no offsets. Running the full
+local default patch recipe against the pinned source produces the same hashes
+for all 38 reconstructed files as the tested combined stack. All option modules,
+recovery code, and the existing recorder are unchanged. No additional kernel
+compilation or hardware execution was needed for the source comparison. NixOS
+evaluation was not available in the packaging environment.
 
-The old and new default patch recipes were reconstructed against kernel commit
-`51231839d5ef007638bd1c3500e6a76b337a66f3`. All 38 reconstructed source files were
-byte-identical. All 27 paths touched by the consolidated display patch matched
-the previously compiled source tree. The patch applied with no fuzz or offsets.
-The optional SCMI patch is unchanged and passed an applicability dry run.
+For an independent source check, use a local kernel Git checkout containing the
+pinned commit and a new output directory:
 
-All seventeen option-module bodies and their ordering were checked for identity,
-allowing only the relocated recovery-script reference. Its Python bytes are
-identical. NixOS evaluation and hardware execution were not performed in the
-packaging environment. Source hashes are recorded in `source-sha256.json`.
+```sh
+nix shell nixpkgs#python3 nixpkgs#git nixpkgs#patch nixpkgs#bash --command python3 \
+  tools/a14-verify-display-series.py \
+  --kernel-source /path/to/local/kernel-git-checkout \
+  --output ~/a14-display-series-verification
+```
 
-After rebuilding and rebooting, check normal dock boot, 4K144, Ethernet, and one
-ordinary standby/wake. Capture the result with the canonical recorder:
+This tool executes the trusted repository's patch recipe in a new directory,
+never in the input kernel checkout. It does not build/install a kernel or
+evaluate Nixpkgs-inherited patches. The optional SCMI variant is outside this
+default-source comparison. Use `source-sha256.json` and the resulting log to
+review the comparison; the tool rejects changed series hashes and order.
+
+For device diagnostics:
 
 ```sh
 sudo nix shell nixpkgs#python3 --command python3 \
   ~/Projects/linux-zenbook-a14-arm/tools/a14-display-capture.py \
   ~/Projects/linux-zenbook-a14-arm \
-  ~/a14-cleanup-boot.tar.gz
+  ~/a14-display-series-boot.tar.gz
 ```
 
-The optional `--delay SECONDS` argument waits before recording. The recorder
-performs no resets or modesets. It saves journals before read-only AUX register
-access; those reads can still wake hardware. Keep the existing connection and
-use a fresh output filename. Runtime paths/parameters and recovery service state
-are included along with the reorganized source files.
-
-Once this packaging baseline is verified, the next independent experiment is
-to disable recovery v4 while keeping transparent LTTPR and every kernel setting
-unchanged. Do not combine that test with this cleanup. Only after it succeeds
-should we consider removing its boot delay or retiring individual diagnostic
-and retry paths. Upstream review will require separating generic fixes from
-board/topology-specific workarounds and the experimental DSC integration.
+The recorder performs no resets or modesets. Its optional `--delay SECONDS`
+argument waits before capture. Journals are saved before read-only AUX access;
+those reads can still wake hardware. Use a fresh output filename.

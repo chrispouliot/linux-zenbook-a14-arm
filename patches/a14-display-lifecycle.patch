@@ -1,0 +1,1394 @@
+Subject: [A14 2/4] A14 display wake, AUX, HPD, and link lifecycle
+
+Retains wake/teardown corrections, diagnostics and gated alternatives.
+The following transparent-LTTPR patch selects the working dock path.
+
+Packaging-only split of the tested stack. Apply all four in series order.
+No experiment gates, diagnostics or runtime defaults changed by this split.
+Original inputs:
+  a14-dp-dsc-wake-test.patch
+  a14-dp-aux-wake-test.patch
+  a14-dock-hpd-test.patch
+  a14-edp-retry-test.patch
+  a14-dp-pair-config-test.patch
+  a14-dp-sink-power-test.patch
+  a14-dp-state-trace-test.patch
+  a14-dp-config-reuse-test.patch
+  a14-dp-repeater-restore-test.patch
+  a14-dp-sink-cleanup-test.patch
+  a14-dp-review-theories-test.patch
+  a14-dp-repeater-reset-test.patch
+
+diff --git a/drivers/gpu/drm/msm/dp/dp_aux.c b/drivers/gpu/drm/msm/dp/dp_aux.c
+--- a/drivers/gpu/drm/msm/dp/dp_aux.c
++++ b/drivers/gpu/drm/msm/dp/dp_aux.c
+@@ -5,6 +5,9 @@
+ 
+ #include <linux/delay.h>
+ #include <linux/iopoll.h>
++#include <linux/ktime.h>
++#include <linux/moduleparam.h>
++#include <linux/of.h>
+ #include <linux/phy/phy.h>
+ #include <linux/string.h>
+ #include <drm/display/drm_dp_helper.h>
+@@ -12,6 +15,16 @@
+ 
+ #include "dp_reg.h"
+ #include "dp_aux.h"
++
++static bool a14_dp_aux_wake_test;
++module_param(a14_dp_aux_wake_test, bool, 0444);
++MODULE_PARM_DESC(a14_dp_aux_wake_test,
++	"Reset A14 dock AUX after native transaction timeouts with Type-C HPD");
++
++static bool a14_dp_aux_diag_test;
++module_param(a14_dp_aux_diag_test, bool, 0444);
++MODULE_PARM_DESC(a14_dp_aux_diag_test,
++	"Log A14 native AUX status and FIFO-call elapsed time before timeout recovery");
+ 
+ enum msm_dp_aux_err {
+ 	DP_AUX_ERR_NONE,
+@@ -35,6 +48,7 @@
+ 
+ 	enum msm_dp_aux_err aux_error_num;
+ 	u32 retry_cnt;
++	u32 a14_last_isr;
+ 	bool cmd_busy;
+ 	bool native;
+ 	bool read;
+@@ -49,6 +63,14 @@
+ 	struct drm_dp_aux msm_dp_aux;
+ };
+ 
++static bool msm_dp_aux_a14_wake_enabled(struct msm_dp_aux_private *aux)
++{
++	return a14_dp_aux_wake_test && !aux->is_edp &&
++		of_machine_is_compatible("asus,zenbook-a14-ux3407na") &&
++		of_device_is_compatible(aux->dev->of_node, "qcom,glymur-dp") &&
++		!strcmp(dev_name(aux->dev), "af54000.displayport-controller");
++}
++
+ static inline u32 msm_dp_read_aux(struct msm_dp_aux_private *aux, u32 offset)
+ {
+ 	return readl_relaxed(aux->aux_base + offset);
+@@ -87,6 +109,27 @@
+ 
+ 	aux_ctrl &= ~DP_AUX_CTRL_RESET;
+ 	msm_dp_write_aux(aux, REG_DP_AUX_CTRL, aux_ctrl);
++}
++
++/* Called with the transfer mutex and runtime-PM reference held. */
++static void msm_dp_aux_a14_recover_timeout(struct msm_dp_aux_private *aux,
++					 struct drm_dp_aux_msg *msg,
++					 bool completion_timeout)
++{
++	/* Respect the existing software disconnect gate, not native HPD alone. */
++	if (!aux->initted || !READ_ONCE(aux->enable_xfers))
++		return;
++
++	dev_warn(aux->dev,
++		 "A14-AUX-wake: timeout addr=%#x request=%#x size=%zu completion=%u isr=%#x error=%u native_hpd=%u; reset AUX\n",
++		 msg->address, msg->request, msg->size, completion_timeout,
++		 READ_ONCE(aux->a14_last_isr), aux->aux_error_num,
++		 msm_dp_aux_is_link_connected(&aux->msm_dp_aux));
++	/* The failed command must not complete a later transfer. */
++	WRITE_ONCE(aux->cmd_busy, false);
++	msm_dp_write_aux(aux, REG_DP_AUX_TRANS_CTRL, 0);
++	msm_dp_aux_reset(aux);
++	msm_dp_aux_clear_hw_interrupts(aux);
+ }
+ 
+ static void msm_dp_aux_enable(struct msm_dp_aux_private *aux)
+@@ -349,6 +392,12 @@
+ 			       struct drm_dp_aux_msg *msg)
+ {
+ 	ssize_t ret;
++	bool a14_recovery = false;
++	bool completion_timeout = false;
++	bool a14_diag = false;
++	ktime_t a14_tx_start = 0;
++	s64 a14_tx_us;
++	u32 a14_status;
+ 	int const aux_cmd_native_max = 16;
+ 	int const aux_cmd_i2c_max = 128;
+ 	struct msm_dp_aux_private *aux;
+@@ -393,6 +442,11 @@
+ 		goto exit;
+ 	}
+ 
++	a14_recovery = aux->native && msm_dp_aux_a14_wake_enabled(aux);
++	if (a14_recovery) {
++		WRITE_ONCE(aux->a14_last_isr, 0);
++		aux->aux_error_num = DP_AUX_ERR_NONE;
++	}
+ 	msm_dp_aux_update_offset_and_segment(aux, msg);
+ 	msm_dp_aux_transfer_helper(aux, msg, true);
+ 
+@@ -407,7 +461,29 @@
+ 		aux->no_send_stop = true;
+ 	}
+ 
++	a14_diag = a14_dp_aux_diag_test && a14_recovery;
++	if (a14_diag)
++		a14_tx_start = ktime_get();
+ 	ret = msm_dp_aux_cmd_fifo_tx(aux, msg);
++	/*
++	 * Capture immediately after completion returns, before this path can
++	 * reset AUX or read its RX FIFO. This is not a wire/GO-to-IRQ timer;
++	 * setup, interrupt latency and scheduling are included. Status bits
++	 * are deliberately left raw until hardware semantics are established.
++	 */
++	if (a14_diag) {
++		a14_tx_us = ktime_us_delta(ktime_get(), a14_tx_start);
++		a14_status = msm_dp_read_aux(aux, REG_DP_AUX_STATUS);
++		if (ret < 0 || aux->aux_error_num != DP_AUX_ERR_NONE)
++			dev_info(aux->dev,
++				 "A14-AUX-diag: addr=%#x request=%#x size=%zu fifo_ret=%zd elapsed_us=%lld status_return=%#x isr=%#x error=%u timeout_count=%#x limits=%#x\n",
++				 msg->address, msg->request, msg->size, ret,
++				 (long long)a14_tx_us, a14_status,
++				 READ_ONCE(aux->a14_last_isr), aux->aux_error_num,
++				 msm_dp_read_aux(aux, REG_DP_TIMEOUT_COUNT),
++				 msm_dp_read_aux(aux, REG_DP_AUX_LIMITS));
++	}
++	completion_timeout = ret == -ETIMEDOUT;
+ 	if (ret < 0) {
+ 		if (aux->native) {
+ 			aux->retry_cnt++;
+@@ -415,7 +491,8 @@
+ 				phy_calibrate(aux->phy);
+ 		}
+ 		/* reset aux if link is in connected state */
+-		if (msm_dp_aux_is_link_connected(msm_dp_aux))
++		if (msm_dp_aux_is_link_connected(msm_dp_aux) &&
++		    !(a14_recovery && completion_timeout))
+ 			msm_dp_aux_reset(aux);
+ 	} else {
+ 		aux->retry_cnt = 0;
+@@ -445,6 +522,9 @@
+ 		}
+ 	}
+ 
++	/* Include IRQ-reported timeouts, not only completion wait expiration. */
++	if (a14_recovery && ret == -ETIMEDOUT)
++		msm_dp_aux_a14_recover_timeout(aux, msg, completion_timeout);
+ 	aux->cmd_busy = false;
+ 
+ exit:
+@@ -465,6 +545,7 @@
+ 
+ 	aux = container_of(msm_dp_aux, struct msm_dp_aux_private, msm_dp_aux);
+ 
++	WRITE_ONCE(aux->a14_last_isr, isr);
+ 	if (!aux->cmd_busy) {
+ 		DRM_ERROR("Unexpected DP AUX IRQ %#010x when not busy\n", isr);
+ 		return IRQ_NONE;
+diff --git a/drivers/gpu/drm/msm/dp/dp_ctrl.c b/drivers/gpu/drm/msm/dp/dp_ctrl.c
+--- a/drivers/gpu/drm/msm/dp/dp_ctrl.c
++++ b/drivers/gpu/drm/msm/dp/dp_ctrl.c
+@@ -10,6 +10,8 @@
+ #include <linux/completion.h>
+ #include <linux/delay.h>
+ #include <linux/iopoll.h>
++#include <linux/moduleparam.h>
++#include <linux/of.h>
+ #include <linux/phy/phy.h>
+ #include <linux/phy/phy-dp.h>
+ #include <linux/pm_opp.h>
+@@ -26,6 +28,56 @@
+ #include "dp_link.h"
+ #include "dp_tu_calc.h"
+ #include <drm/drm_fixed.h>
++
++static bool a14_dp_dsc_wake_test;
++module_param(a14_dp_dsc_wake_test, bool, 0444);
++MODULE_PARM_DESC(a14_dp_dsc_wake_test,
++	"Test A14 port-one DSC teardown and checked receiver setup on wake");
++
++static bool a14_edp_retry_test;
++module_param(a14_edp_retry_test, bool, 0444);
++MODULE_PARM_DESC(a14_edp_retry_test,
++	"Test bounded A14 internal-panel training retries without insufficient fallback");
++
++static bool a14_dp_pair_config_test;
++module_param(a14_dp_pair_config_test, bool, 0444);
++MODULE_PARM_DESC(a14_dp_pair_config_test,
++	"Test one checked AUX write for A14 dock link rate and lane count");
++
++static bool a14_dp_sink_power_test;
++module_param(a14_dp_sink_power_test, bool, 0444);
++MODULE_PARM_DESC(a14_dp_sink_power_test,
++	"Test explicit A14 dock receiver D3/D0 sequencing across stream disable/enable");
++
++static bool a14_dp_sink_cleanup_test;
++module_param(a14_dp_sink_cleanup_test, bool, 0444);
++MODULE_PARM_DESC(a14_dp_sink_cleanup_test,
++	"Clear A14 sink DSC/FEC state for uncompressed starts and failed link training");
++
++static bool a14_dp_bounded_cleanup_test;
++module_param(a14_dp_bounded_cleanup_test, bool, 0444);
++MODULE_PARM_DESC(a14_dp_bounded_cleanup_test,
++	"Use single-transfer DSC/FEC teardown on A14 port one, stopping on error");
++
++static bool a14_dp_repeater_reset_test;
++module_param(a14_dp_repeater_reset_test, bool, 0444);
++MODULE_PARM_DESC(a14_dp_repeater_reset_test,
++	"Test verified LTTPR mode reset on inactive A14 port-one two-repeater links");
++
++static bool a14_dp_repeater_restore_test;
++module_param(a14_dp_repeater_restore_test, bool, 0444);
++MODULE_PARM_DESC(a14_dp_repeater_restore_test,
++	"Restore a verified A14 repeater transparent-mode reversion before training");
++
++static bool a14_dp_config_reuse_test;
++module_param(a14_dp_config_reuse_test, bool, 0444);
++MODULE_PARM_DESC(a14_dp_config_reuse_test,
++	"Reuse freshly verified A14 dock rate/lane settings before normal training");
++
++static bool a14_dp_state_trace_test;
++module_param(a14_dp_state_trace_test, bool, 0444);
++MODULE_PARM_DESC(a14_dp_state_trace_test,
++	"Trace A14 dock receiver/repeater state around checked link configuration");
+ 
+ #define POLLING_SLEEP_US			1000
+ #define POLLING_TIMEOUT_US			10000
+@@ -120,7 +172,89 @@
+ 	bool stream_clks_on;
+ 	struct msm_dp_dsc_cfg_data dsc_data;
+ 	bool dsc_configured;
++	u32 a14_state_trace_sequence;
+ };
++
++bool msm_dp_ctrl_a14_wake_enabled(struct msm_dp_ctrl *msm_dp_ctrl)
++{
++	struct msm_dp_ctrl_private *ctrl = container_of(msm_dp_ctrl,
++		struct msm_dp_ctrl_private, msm_dp_ctrl);
++
++	return a14_dp_dsc_wake_test &&
++		of_machine_is_compatible("asus,zenbook-a14-ux3407na") &&
++		of_device_is_compatible(ctrl->dev->of_node, "qcom,glymur-dp") &&
++		!strcmp(dev_name(ctrl->dev), "af54000.displayport-controller");
++}
++
++bool msm_dp_ctrl_a14_edp_retry_enabled(struct msm_dp_ctrl *msm_dp_ctrl)
++{
++	struct msm_dp_ctrl_private *ctrl = container_of(msm_dp_ctrl,
++		struct msm_dp_ctrl_private, msm_dp_ctrl);
++
++	return a14_edp_retry_test &&
++		of_machine_is_compatible("asus,zenbook-a14-ux3407na") &&
++		of_device_is_compatible(ctrl->dev->of_node, "qcom,glymur-dp") &&
++		!strcmp(dev_name(ctrl->dev), "af6c000.displayport-controller");
++}
++
++static bool msm_dp_ctrl_a14_edp_native(struct msm_dp_ctrl_private *ctrl)
++{
++	const struct drm_display_mode *mode = &ctrl->panel->msm_dp_mode.drm_mode;
++
++	/* Keep this experiment on the captured uncompressed native panel mode. */
++	return msm_dp_ctrl_a14_edp_retry_enabled(&ctrl->msm_dp_ctrl) &&
++		!(ctrl->link->sink_request & DP_TEST_LINK_PHY_TEST_PATTERN) &&
++		!DP_DSC_PANEL_EN(ctrl->panel) &&
++		!ctrl->panel->msm_dp_mode.out_fmt_is_yuv_420 &&
++		ctrl->panel->msm_dp_mode.bpp == 24 &&
++		mode->hdisplay == 1920 && mode->vdisplay == 1200 &&
++		mode->clock == 154260 &&
++		ctrl->panel->link_info.rate == 270000 &&
++		ctrl->panel->link_info.num_lanes == 2;
++}
++
++static bool msm_dp_ctrl_a14_edp_link_fits(struct msm_dp_ctrl_private *ctrl)
++{
++	/* Full mode clock: wide-bus halves the interface clock, not payload. */
++	u64 required = (u64)ctrl->panel->msm_dp_mode.drm_mode.clock *
++		ctrl->panel->msm_dp_mode.bpp;
++	u64 available = (u64)ctrl->link->link_params.rate *
++		ctrl->link->link_params.num_lanes * 8;
++
++	return required && required <= available;
++}
++
++/*
++ * AUX access is also valid with Type-C HPD delivered by PMIC GLINK.
++ * The existing AUX transfer gate still rejects accesses after disconnect;
++ * this experiment never overrides enable_xfers or the AUX runtime-PM guard.
++ */
++static int msm_dp_ctrl_a14_write_verify(struct msm_dp_ctrl_private *ctrl,
++				      unsigned int address, u8 value)
++{
++	u8 actual;
++	int ret;
++
++	ret = drm_dp_dpcd_writeb(ctrl->aux, address, value);
++	if (ret != 1)
++		return ret < 0 ? ret : -EIO;
++	ret = drm_dp_dpcd_readb(ctrl->aux, address, &actual);
++	if (ret != 1)
++		return ret < 0 ? ret : -EIO;
++	return actual == value ? 0 : -EIO;
++}
++
++static int msm_dp_ctrl_a14_clear_sink(struct msm_dp_ctrl_private *ctrl)
++{
++	int dsc, fec;
++
++	/* Attempt both clears; host shutdown must proceed even after AUX failure. */
++	dsc = msm_dp_ctrl_a14_write_verify(ctrl, DP_DSC_ENABLE, 0);
++	fec = msm_dp_ctrl_a14_write_verify(ctrl, DP_FEC_CONFIGURATION, 0);
++	dev_info(ctrl->dev, "A14-DSC-wake: sink clear DSC=%d FEC=%d native_hpd=%u\n",
++		 dsc, fec, msm_dp_aux_is_link_connected(ctrl->aux));
++	return dsc ? dsc : fec;
++}
+ 
+ static inline u32 msm_dp_read_ahb(const struct msm_dp_ctrl_private *ctrl, u32 offset)
+ {
+@@ -177,6 +311,285 @@
+ 	}
+ 
+ 	return err;
++}
++
++static bool msm_dp_ctrl_a14_pair_config_enabled(struct msm_dp_ctrl_private *ctrl)
++{
++	return a14_dp_pair_config_test &&
++		msm_dp_ctrl_a14_wake_enabled(&ctrl->msm_dp_ctrl);
++}
++
++/* One native transfer, no implicit probe or helper retry loop. */
++static int msm_dp_ctrl_a14_single_xfer(struct drm_dp_aux *aux, unsigned int address,
++				     u8 request, u8 *buffer, size_t size, u8 *reply)
++{
++	struct drm_dp_aux_msg msg = {
++		.address = address,
++		.request = request,
++		.reply = 0xff,
++		.buffer = buffer,
++		.size = size,
++	};
++	int ret;
++
++	*reply = 0xff;
++	if (!size || size > DP_AUX_MAX_PAYLOAD_BYTES || !buffer ||
++	    (request != DP_AUX_NATIVE_READ && request != DP_AUX_NATIVE_WRITE))
++		return -EINVAL;
++	if (aux->is_remote)
++		return -EOPNOTSUPP;
++
++	/* Same serialization and powered-down guard as native DPCD access. */
++	mutex_lock(&aux->hw_mutex);
++	if (aux->powered_down) {
++		ret = -EBUSY;
++		goto out;
++	}
++	/* The normal driver callback retains AUX init/HPD/PM checks. */
++	ret = aux->transfer(aux, &msg);
++	*reply = msg.reply;
++	if (ret >= 0) {
++		switch (msg.reply & DP_AUX_NATIVE_REPLY_MASK) {
++		case DP_AUX_NATIVE_REPLY_ACK:
++			if (ret != size)
++				ret = -EPROTO;
++			break;
++		case DP_AUX_NATIVE_REPLY_DEFER:
++			ret = -EAGAIN;
++			break;
++		default:
++			ret = -EIO;
++			break;
++		}
++	}
++ out:
++	mutex_unlock(&aux->hw_mutex);
++	return ret;
++}
++
++static int msm_dp_ctrl_a14_trace_read(struct drm_dp_aux *aux, unsigned int address,
++				    u8 *buffer, size_t size, u8 *reply)
++{
++	return msm_dp_ctrl_a14_single_xfer(aux, address, DP_AUX_NATIVE_READ,
++					 buffer, size, reply);
++}
++
++static int msm_dp_ctrl_a14_teardown_sink(struct msm_dp_ctrl_private *ctrl)
++{
++	static const unsigned int addresses[] = { DP_DSC_ENABLE, DP_FEC_CONFIGURATION };
++	u8 value, reply;
++	int i, ret;
++
++	if (!a14_dp_bounded_cleanup_test ||
++	    !msm_dp_ctrl_a14_wake_enabled(&ctrl->msm_dp_ctrl) ||
++	    (ctrl->link->sink_request & DP_TEST_LINK_PHY_TEST_PATTERN))
++		return msm_dp_ctrl_a14_clear_sink(ctrl);
++
++	for (i = 0; i < ARRAY_SIZE(addresses); i++) {
++		value = 0;
++		ret = msm_dp_ctrl_a14_single_xfer(ctrl->aux, addresses[i],
++				DP_AUX_NATIVE_WRITE, &value, 1, &reply);
++		if (ret != 1)
++			goto failed;
++		ret = msm_dp_ctrl_a14_single_xfer(ctrl->aux, addresses[i],
++				DP_AUX_NATIVE_READ, &value, 1, &reply);
++		if (ret != 1)
++			goto failed;
++		if (value) {
++			ret = -EIO;
++			goto failed;
++		}
++	}
++	dev_info(ctrl->dev, "A14-bounded-cleanup: DSC/FEC cleared and verified\n");
++	return 0;
++failed:
++	ret = ret < 0 ? ret : -EIO;
++	dev_info(ctrl->dev,
++		 "A14-bounded-cleanup: stop address=%#x ret=%d reply=%#x; host teardown continues\n",
++		 addresses[i], ret, reply);
++	return ret;
++}
++
++static void msm_dp_ctrl_a14_trace_state(struct msm_dp_ctrl_private *ctrl,
++				      const char *phase, int attempt, int result)
++{
++	static const struct {
++		unsigned int address;
++		u8 size;
++	} ranges[] = {
++		{ DP_SET_POWER, 1 },
++		{ DP_DPCD_REV, DP_RECEIVER_CAP_SIZE },
++		{ DP_LINK_BW_SET, 3 },
++		{ DP_FEC_CONFIGURATION, 1 },
++		{ DP_DSC_ENABLE, 1 },
++		{ DP_LANE0_1_STATUS, DP_LINK_STATUS_SIZE },
++		{ DP_LT_TUNABLE_PHY_REPEATER_FIELD_DATA_STRUCTURE_REV,
++		  DP_LTTPR_COMMON_CAP_SIZE },
++	};
++	u8 data[DP_AUX_MAX_PAYLOAD_BYTES], reply;
++	u32 seq;
++	int i, ret;
++
++	if (!a14_dp_state_trace_test || !msm_dp_ctrl_a14_pair_config_enabled(ctrl))
++		return;
++
++	seq = ++ctrl->a14_state_trace_sequence;
++	dev_info(ctrl->dev,
++		 "A14-DP-state: seq=%u phase=%s attempt=%d result=%d rate=%u lanes=%u core=%u link=%u stream=%u cached_repeaters=%d cached_caps=%*ph\n",
++		 seq, phase, attempt, result, ctrl->link->link_params.rate,
++		 ctrl->link->link_params.num_lanes, ctrl->core_clks_on,
++		 ctrl->link_clks_on, ctrl->stream_clks_on, ctrl->link->lttpr_count,
++		 DP_LTTPR_COMMON_CAP_SIZE, ctrl->link->lttpr_common_caps);
++
++	for (i = 0; i < ARRAY_SIZE(ranges); i++) {
++		ret = msm_dp_ctrl_a14_trace_read(ctrl->aux, ranges[i].address,
++					       data, ranges[i].size, &reply);
++		if (ret == ranges[i].size)
++			dev_info(ctrl->dev,
++				 "A14-DP-state: seq=%u addr=%#x size=%u ret=%d reply=%02x data=%*ph\n",
++				 seq, ranges[i].address, ranges[i].size, ret, reply,
++				 ret, data);
++		else
++			dev_info(ctrl->dev,
++				 "A14-DP-state: seq=%u addr=%#x size=%u ret=%d reply=%02x\n",
++				 seq, ranges[i].address, ranges[i].size, ret, reply);
++		/* No further probing after a reported detach/power-down. */
++		if (ret == -ENXIO || ret == -ENODEV || ret == -EBUSY)
++			break;
++	}
++	dev_info(ctrl->dev, "A14-DP-state: seq=%u end\n", seq);
++}
++
++/* Matching DPCD values only satisfy configuration, never link training. */
++static bool msm_dp_ctrl_a14_config_matches(struct msm_dp_ctrl_private *ctrl,
++					 const u8 config[2])
++{
++	u8 actual[2];
++	int ret;
++
++	if (!a14_dp_config_reuse_test || !msm_dp_ctrl_a14_pair_config_enabled(ctrl))
++		return false;
++
++	/* Fresh normal DPCD access: do not use cached or diagnostic data. */
++	ret = drm_dp_dpcd_read(ctrl->aux, DP_LINK_BW_SET, actual, sizeof(actual));
++	if (ret != sizeof(actual)) {
++		dev_info(ctrl->dev,
++			 "A14-DP-reuse: pre-read returned=%d; using checked write path\n",
++			 ret);
++		return false;
++	}
++
++	if (actual[0] != config[0] || actual[1] != config[1]) {
++		dev_info(ctrl->dev,
++			 "A14-DP-reuse: mismatch got=%02x/%02x expected=%02x/%02x; using checked write path\n",
++			 actual[0], actual[1], config[0], config[1]);
++		return false;
++	}
++
++	dev_info(ctrl->dev,
++		 "A14-DP-reuse: fresh match rate=%02x lanes=%02x; skipping rate/lane write, training still required\n",
++		 actual[0], actual[1]);
++	return true;
++}
++
++static int msm_dp_ctrl_a14_pair_configure(struct msm_dp_ctrl_private *ctrl,
++					struct msm_dp_link_info *link)
++{
++	u8 config[] = { drm_dp_link_rate_to_bw_code(link->rate),
++		       link->num_lanes | DP_LANE_COUNT_ENHANCED_FRAME_EN };
++	u8 actual[2];
++	int attempt, ret;
++
++	/* The existing dock test uses LINK_BW_SET, never an eDP rate table. */
++	if (link->use_rate_set)
++		return -EINVAL;
++
++	msm_dp_ctrl_a14_trace_state(ctrl, "before-config", 1, 0);
++	if (msm_dp_ctrl_a14_config_matches(ctrl, config))
++		return 0;
++	for (attempt = 1; attempt <= 2; attempt++) {
++		/*
++		 * Match the i915 LINK_BW_SET programming form: rate and lanes
++		 * in one native AUX request, instead of a lane-first write.
++		 * Keep the normal AUX locking, retries and disconnect checks.
++		 */
++		ret = drm_dp_dpcd_write(ctrl->aux, DP_LINK_BW_SET,
++					config, sizeof(config));
++		if (ret != sizeof(config)) {
++			dev_warn(ctrl->dev,
++				 "A14-DP-pair: attempt=%d write returned=%d expected=2\n",
++				 attempt, ret);
++		} else {
++			ret = drm_dp_dpcd_read(ctrl->aux, DP_LINK_BW_SET,
++					       actual, sizeof(actual));
++			if (ret == sizeof(actual)) {
++				if (actual[0] == config[0] && actual[1] == config[1]) {
++					dev_info(ctrl->dev,
++						 "A14-DP-pair: verified rate=%02x lanes=%02x attempt=%d\n",
++						 config[0], config[1], attempt);
++					return 0;
++				}
++				dev_warn(ctrl->dev,
++					 "A14-DP-pair: attempt=%d mismatch got=%02x/%02x expected=%02x/%02x\n",
++					 attempt, actual[0], actual[1], config[0], config[1]);
++			} else {
++				dev_warn(ctrl->dev,
++					 "A14-DP-pair: attempt=%d read returned=%d expected=2\n",
++					 attempt, ret);
++			}
++		}
++		/* Snapshot before cleanup; preserve the configuration return value. */
++		if (ret != -ENXIO && ret != -ENODEV && ret != -EBUSY)
++			msm_dp_ctrl_a14_trace_state(ctrl, "config-failed", attempt, ret);
++		if (ret >= 0)
++			ret = -EIO;
++		/* A real disconnect is not a reason to issue another request. */
++		if (attempt == 2 || ret == -ENXIO || ret == -ENODEV)
++			return ret;
++		msleep(20);
++	}
++
++	return -EIO;
++}
++
++static int msm_dp_ctrl_a14_link_configure(struct msm_dp_ctrl_private *ctrl,
++					 struct msm_dp_link_info *link)
++{
++	u8 actual[2];
++	u8 lanes = link->num_lanes | DP_LANE_COUNT_ENHANCED_FRAME_EN;
++	u8 rate = drm_dp_link_rate_to_bw_code(link->rate);
++	int attempt, ret = -EIO;
++
++	if (msm_dp_ctrl_a14_pair_config_enabled(ctrl))
++		return msm_dp_ctrl_a14_pair_configure(ctrl, link);
++
++	/* This experiment uses LINK_BW_SET, never the eDP rate table. */
++	if (link->use_rate_set)
++		return -EINVAL;
++	for (attempt = 0; attempt < 2; attempt++) {
++		ret = drm_dp_dpcd_writeb(ctrl->aux, DP_LANE_COUNT_SET, lanes);
++		if (ret == 1)
++			ret = drm_dp_dpcd_writeb(ctrl->aux, DP_LINK_BW_SET, rate);
++		if (ret == 1) {
++			ret = drm_dp_dpcd_read(ctrl->aux, DP_LINK_BW_SET,
++					       actual, sizeof(actual));
++			if (ret == sizeof(actual) && actual[0] == rate &&
++			    actual[1] == lanes) {
++				dev_info(ctrl->dev,
++					 "A14-DSC-wake: receiver verified rate=%02x lanes=%02x attempt=%d\n",
++					 rate, lanes, attempt + 1);
++				return 0;
++			}
++		}
++		if (ret >= 0)
++			ret = -EIO;
++		dev_warn(ctrl->dev,
++			 "A14-DSC-wake: receiver setup attempt=%d failed=%d\n",
++			 attempt + 1, ret);
++		if (!attempt)
++			msleep(20);
++	}
++	return ret;
+ }
+ 
+ /*
+@@ -1694,6 +2107,156 @@
+ 	return 0;
+ }
+ 
++/*
++ * One reset sequence per full on_link(), before main-link enable and FEC
++ * setup, not in link_train(): on_stream() can train again with clocks on.
++ * The direct one-repeater path and active-link maintenance are excluded.
++ */
++static int msm_dp_ctrl_a14_reset_repeater_chain(struct msm_dp_ctrl_private *ctrl)
++{
++	const unsigned int mode_index = DP_PHY_REPEATER_MODE -
++		DP_LT_TUNABLE_PHY_REPEATER_FIELD_DATA_STRUCTURE_REV;
++	u8 caps[DP_LTTPR_COMMON_CAP_SIZE], initial;
++	int count, ret;
++	u32 mainlink;
++
++	if (!a14_dp_repeater_reset_test ||
++	    !msm_dp_ctrl_a14_wake_enabled(&ctrl->msm_dp_ctrl) ||
++	    (ctrl->link->sink_request & DP_TEST_LINK_PHY_TEST_PATTERN) ||
++	    ctrl->link->lttpr_count != 2 ||
++	    ctrl->link->link_params.num_lanes != 2)
++		return 0;
++
++	if (ctrl->stream_clks_on) {
++		dev_info(ctrl->dev, "A14-repeater-reset: skipped; stream clocks on\n");
++		return 0;
++	}
++	if (!ctrl->core_clks_on || !ctrl->link_clks_on)
++		return -EIO;
++
++	mainlink = msm_dp_read_link(ctrl, REG_DP_MAINLINK_CTRL);
++	if (mainlink & DP_MAINLINK_CTRL_ENABLE) {
++		dev_info(ctrl->dev,
++			 "A14-repeater-reset: skipped; transmitter enabled ctrl=%#x\n", mainlink);
++		return 0;
++	}
++
++	ret = drm_dp_dpcd_read(ctrl->aux,
++		DP_LT_TUNABLE_PHY_REPEATER_FIELD_DATA_STRUCTURE_REV,
++		caps, sizeof(caps));
++	if (ret != sizeof(caps))
++		return ret < 0 ? ret : -EIO;
++	count = drm_dp_lttpr_count(caps);
++	initial = caps[mode_index];
++	if (caps[0] < 0x14 || caps[0] == 0xff || count != 2 ||
++	    (initial != DP_PHY_REPEATER_MODE_TRANSPARENT &&
++	     initial != DP_PHY_REPEATER_MODE_NON_TRANSPARENT))
++		return -EINVAL;
++
++	dev_info(ctrl->dev,
++		 "A14-repeater-reset: begin mode=%02x count=%d mainlink=%#x stream=0\n",
++		 initial, count, mainlink);
++	/* Establish aa first if the chain reverted to 55 during standby. */
++	if (initial == DP_PHY_REPEATER_MODE_TRANSPARENT) {
++		ret = msm_dp_ctrl_a14_write_verify(ctrl, DP_PHY_REPEATER_MODE,
++				DP_PHY_REPEATER_MODE_NON_TRANSPARENT);
++		dev_info(ctrl->dev, "A14-repeater-reset: establish aa ret=%d\n", ret);
++		if (ret)
++			return ret;
++	}
++
++	/* DP 2.0 3.6.7: the non-transparent -> transparent edge resets state. */
++	ret = msm_dp_ctrl_a14_write_verify(ctrl, DP_PHY_REPEATER_MODE,
++			DP_PHY_REPEATER_MODE_TRANSPARENT);
++	dev_info(ctrl->dev, "A14-repeater-reset: aa->55 ret=%d\n", ret);
++	if (ret)
++		return ret;
++
++	ret = msm_dp_ctrl_a14_write_verify(ctrl, DP_PHY_REPEATER_MODE,
++			DP_PHY_REPEATER_MODE_NON_TRANSPARENT);
++	dev_info(ctrl->dev, "A14-repeater-reset: 55->aa ret=%d\n", ret);
++	if (ret)
++		return ret;
++
++	/* Require the same detected chain before normal per-repeater training. */
++	ret = drm_dp_dpcd_read(ctrl->aux,
++		DP_LT_TUNABLE_PHY_REPEATER_FIELD_DATA_STRUCTURE_REV,
++		caps, sizeof(caps));
++	if (ret != sizeof(caps))
++		return ret < 0 ? ret : -EIO;
++	if (caps[0] < 0x14 || caps[0] == 0xff || drm_dp_lttpr_count(caps) != count ||
++	    caps[mode_index] != DP_PHY_REPEATER_MODE_NON_TRANSPARENT)
++		return -EINVAL;
++
++	ctrl->link->lttpr_common_caps[mode_index] = caps[mode_index];
++	dev_info(ctrl->dev, "A14-repeater-reset: verified reset; normal sink setup/training follows\n");
++	return 0;
++}
++
++/* Resume can retain the repeater count while hardware reverts to transparent. */
++static int msm_dp_ctrl_a14_restore_repeater_mode(struct msm_dp_ctrl_private *ctrl)
++{
++	const unsigned int mode_index = DP_PHY_REPEATER_MODE -
++		DP_LT_TUNABLE_PHY_REPEATER_FIELD_DATA_STRUCTURE_REV;
++	u8 caps[DP_LTTPR_COMMON_CAP_SIZE], mode;
++	int count, ret;
++
++	if (!a14_dp_repeater_restore_test ||
++	    !msm_dp_ctrl_a14_wake_enabled(&ctrl->msm_dp_ctrl) ||
++	    !ctrl->link->lttpr_count)
++		return 0;
++
++	if (ctrl->link->lttpr_count < 0 ||
++	    ctrl->link->lttpr_count > DP_MAX_LTTPR_COUNT)
++		return -EINVAL;
++
++	/* Read live state; do not infer the mode from the cached caps. */
++	ret = drm_dp_dpcd_read(ctrl->aux,
++		DP_LT_TUNABLE_PHY_REPEATER_FIELD_DATA_STRUCTURE_REV,
++		caps, sizeof(caps));
++	if (ret != sizeof(caps)) {
++		dev_warn(ctrl->dev, "A14-DP-repeater: caps read returned=%d\n", ret);
++		return ret < 0 ? ret : -EIO;
++	}
++
++	count = drm_dp_lttpr_count(caps);
++	mode = caps[mode_index];
++	dev_info(ctrl->dev,
++		 "A14-DP-repeater: live_count=%d cached_count=%d mode=%02x caps=%*ph\n",
++		 count, ctrl->link->lttpr_count, mode, (int)sizeof(caps), caps);
++	if (caps[0] < 0x14 || caps[0] == 0xff || count != ctrl->link->lttpr_count)
++		return -EINVAL;
++
++	if (mode == DP_PHY_REPEATER_MODE_NON_TRANSPARENT)
++		return 0;
++	if (mode != DP_PHY_REPEATER_MODE_TRANSPARENT)
++		return -EINVAL;
++
++	/* Already transparent: restore only the missing non-transparent step. */
++	ret = drm_dp_dpcd_writeb(ctrl->aux, DP_PHY_REPEATER_MODE,
++		DP_PHY_REPEATER_MODE_NON_TRANSPARENT);
++	if (ret != 1) {
++		dev_warn(ctrl->dev, "A14-DP-repeater: restore write returned=%d\n", ret);
++		return ret < 0 ? ret : -EIO;
++	}
++
++	ret = drm_dp_dpcd_readb(ctrl->aux, DP_PHY_REPEATER_MODE, &mode);
++	if (ret != 1) {
++		dev_warn(ctrl->dev, "A14-DP-repeater: verify read returned=%d\n", ret);
++		return ret < 0 ? ret : -EIO;
++	}
++	if (mode != DP_PHY_REPEATER_MODE_NON_TRANSPARENT) {
++		dev_warn(ctrl->dev, "A14-DP-repeater: verify mode=%02x expected=aa\n", mode);
++		return -EIO;
++	}
++
++	/* Do not change topology, rate/lane selection, or bypass link training. */
++	ctrl->link->lttpr_common_caps[mode_index] = mode;
++	dev_info(ctrl->dev,
++		 "A14-DP-repeater: restored 55->aa and verified; normal training follows\n");
++	return 0;
++}
++
+ static int msm_dp_ctrl_link_train(struct msm_dp_ctrl_private *ctrl,
+ 			int *training_step)
+ {
+@@ -1704,19 +2267,34 @@
+ 	u8 assr;
+ 	struct msm_dp_link_info link_info = {0};
+ 
++	ret = msm_dp_ctrl_a14_restore_repeater_mode(ctrl);
++	if (ret) {
++		dev_warn(ctrl->dev, "A14-DP-repeater: pre-training check failed=%d\n", ret);
++		return ret;
++	}
++
+ 	msm_dp_ctrl_config_ctrl(ctrl);
+ 
+ 	link_info.num_lanes = ctrl->link->link_params.num_lanes;
+ 	link_info.rate = ctrl->link->link_params.rate;
+ 	link_info.capabilities = DP_LINK_CAP_ENHANCED_FRAMING;
+ 
+-	msm_dp_aux_link_configure(ctrl->aux, &link_info);
++	if (msm_dp_ctrl_a14_wake_enabled(&ctrl->msm_dp_ctrl)) {
++		ret = msm_dp_ctrl_a14_link_configure(ctrl, &link_info);
++		if (ret)
++			return ret;
++	} else {
++		msm_dp_aux_link_configure(ctrl->aux, &link_info);
++	}
+ 
+ 	if (drm_dp_max_downspread(dpcd))
+ 		encoding[0] |= DP_SPREAD_AMP_0_5;
+ 
+ 	/* config DOWNSPREAD_CTRL and MAIN_LINK_CHANNEL_CODING_SET */
+-	drm_dp_dpcd_write(ctrl->aux, DP_DOWNSPREAD_CTRL, encoding, 2);
++	ret = drm_dp_dpcd_write(ctrl->aux, DP_DOWNSPREAD_CTRL, encoding, 2);
++	if (msm_dp_ctrl_a14_wake_enabled(&ctrl->msm_dp_ctrl) && ret != 2)
++		return ret < 0 ? ret : -EIO;
++	ret = 0;
+ 
+ 	if (drm_dp_alternate_scrambler_reset_cap(dpcd)) {
+ 		assr = DP_ALTERNATE_SCRAMBLER_RESET_ENABLE;
+@@ -1802,7 +2380,9 @@
+ {
+ 	if (!ctrl->dsc_configured)
+ 		return;
+-	if (msm_dp_aux_is_link_connected(ctrl->aux)) {
++	if (msm_dp_ctrl_a14_wake_enabled(&ctrl->msm_dp_ctrl)) {
++		msm_dp_ctrl_a14_teardown_sink(ctrl);
++	} else if (msm_dp_aux_is_link_connected(ctrl->aux)) {
+ 		drm_dp_dpcd_writeb(ctrl->aux, DP_DSC_ENABLE, 0);
+ 		drm_dp_dpcd_writeb(ctrl->aux, DP_FEC_CONFIGURATION, 0);
+ 	}
+@@ -1811,6 +2391,120 @@
+ 	msm_dp_ctrl_config_dsc_dto(ctrl);
+ 	msm_dp_panel_override_ack_dto(ctrl->panel, false);
+ 	ctrl->dsc_configured = false;
++}
++
++int msm_dp_ctrl_a14_sink_power(struct msm_dp_ctrl *msm_dp_ctrl, bool on)
++{
++	struct msm_dp_ctrl_private *ctrl = container_of(msm_dp_ctrl,
++		struct msm_dp_ctrl_private, msm_dp_ctrl);
++	u8 power, requested;
++	int ret;
++
++	if (!a14_dp_sink_power_test ||
++	    !msm_dp_ctrl_a14_wake_enabled(msm_dp_ctrl))
++		return 0;
++	if (ctrl->panel->dpcd[DP_DPCD_REV] < 0x11 ||
++	    ctrl->panel->dpcd[DP_DPCD_REV] == 0xff ||
++	    ctrl->link->sink_request & DP_TEST_LINK_PHY_TEST_PATTERN)
++		return 0;
++
++	/* Called while AUX is initialized; never bypass its disconnect guard. */
++	if (!on)
++		msm_dp_ctrl_dsc_stop(ctrl);
++
++	ret = drm_dp_dpcd_readb(ctrl->aux, DP_SET_POWER, &power);
++	if (ret != 1)
++		goto fail;
++	requested = (power & ~DP_SET_POWER_MASK) |
++		(on ? DP_SET_POWER_D0 : DP_SET_POWER_D3);
++	ret = drm_dp_dpcd_writeb(ctrl->aux, DP_SET_POWER, requested);
++	if (ret != 1)
++		goto fail;
++
++	if (on) {
++		usleep_range(1000, 2000);
++		ret = drm_dp_dpcd_readb(ctrl->aux, DP_SET_POWER, &power);
++		if (ret != 1)
++			goto fail;
++		if ((power & DP_SET_POWER_MASK) != DP_SET_POWER_D0) {
++			ret = -EIO;
++			goto fail;
++		}
++		dev_info(ctrl->dev, "A14-DP-power: D0 verified before sink check\n");
++	} else {
++		/* No read after D3: the receiver is allowed to go to sleep. */
++		dev_info(ctrl->dev, "A14-DP-power: D3 write accepted before PHY shutdown\n");
++	}
++	return 0;
++fail:
++	if (ret >= 0)
++		ret = -EIO;
++	dev_warn(ctrl->dev, "A14-DP-power: D%u request failed=%d\n",
++		 on ? 0 : 3, ret);
++	return ret;
++}
++
++static int msm_dp_ctrl_a14_prepare_sink(struct msm_dp_ctrl_private *ctrl)
++{
++	u8 power;
++	int ret;
++
++	/* Check the D0 write too: the older power-up helper ignores write failure. */
++	ret = drm_dp_dpcd_readb(ctrl->aux, DP_SET_POWER, &power);
++	if (ret != 1)
++		return ret < 0 ? ret : -EIO;
++	power = (power & ~DP_SET_POWER_MASK) | DP_SET_POWER_D0;
++	ret = drm_dp_dpcd_writeb(ctrl->aux, DP_SET_POWER, power);
++	if (ret != 1)
++		return ret < 0 ? ret : -EIO;
++	usleep_range(1000, 2000);
++	ret = drm_dp_dpcd_readb(ctrl->aux, DP_SET_POWER, &power);
++	if (ret != 1)
++		return ret < 0 ? ret : -EIO;
++	if ((power & DP_SET_POWER_MASK) != DP_SET_POWER_D0)
++		return -EIO;
++	return msm_dp_ctrl_a14_clear_sink(ctrl);
++}
++
++/* Keep failed compressed setup from leaking sink state into the next mode. */
++static bool msm_dp_ctrl_a14_sink_cleanup_enabled(struct msm_dp_ctrl_private *ctrl)
++{
++	return a14_dp_sink_cleanup_test &&
++		msm_dp_ctrl_a14_wake_enabled(&ctrl->msm_dp_ctrl) &&
++		!(ctrl->link->sink_request & DP_TEST_LINK_PHY_TEST_PATTERN);
++}
++
++static int msm_dp_ctrl_a14_prepare_link_sink(struct msm_dp_ctrl_private *ctrl)
++{
++	if (!msm_dp_ctrl_a14_wake_enabled(&ctrl->msm_dp_ctrl) ||
++	    ctrl->stream_clks_on)
++		return 0;
++
++	/* Preserve the old DSC preparation when this additional gate is off. */
++	if (!DP_DSC_PANEL_EN(ctrl->panel) &&
++	    !msm_dp_ctrl_a14_sink_cleanup_enabled(ctrl))
++		return 0;
++
++	if (msm_dp_ctrl_a14_sink_cleanup_enabled(ctrl))
++		dev_info(ctrl->dev, "A14-DP-cleanup: prepare full link dsc=%u\n",
++			 !!DP_DSC_PANEL_EN(ctrl->panel));
++	return msm_dp_ctrl_a14_prepare_sink(ctrl);
++}
++
++static void msm_dp_ctrl_a14_failed_link_cleanup(struct msm_dp_ctrl_private *ctrl,
++					       int training_error)
++{
++	int ret;
++
++	if (!msm_dp_ctrl_a14_sink_cleanup_enabled(ctrl))
++		return;
++
++	/* AUX is still initialized here; its normal disconnect guards apply. */
++	ret = msm_dp_ctrl_a14_teardown_sink(ctrl);
++	dev_info(ctrl->dev,
++		 "A14-DP-cleanup: failed link error=%d sink clear=%d before PHY shutdown\n",
++		 training_error, ret);
++	/* Even if the sink is unreachable, host teardown must continue. */
+ }
+ 
+ static int msm_dp_ctrl_setup_main_link(struct msm_dp_ctrl_private *ctrl,
+@@ -2159,6 +2853,48 @@
+ 	return 0;
+ }
+ 
++/* Caller selects this only for the gated native two-lane eDP mode. */
++static int msm_dp_ctrl_a14_edp_train(struct msm_dp_ctrl_private *ctrl,
++				     bool reinitialize)
++{
++	unsigned int training_step;
++	int attempt, ret;
++
++	/* Never restart a video stream on the invalid one-lane fallback. */
++	if (!msm_dp_ctrl_a14_edp_link_fits(ctrl))
++		return -ENOSPC;
++
++	for (attempt = 1; attempt <= 3; attempt++) {
++		ctrl->link->phy_params.v_level = 0;
++		ctrl->link->phy_params.p_level = 0;
++		training_step = DP_TRAINING_NONE;
++		ret = msm_dp_ctrl_setup_main_link(ctrl, &training_step);
++		dev_info(ctrl->dev,
++			 "A14-eDP-retry: attempt=%d rate=%u lanes=%u step=%u rc=%d\n",
++			 attempt, ctrl->link->link_params.rate,
++			 ctrl->link->link_params.num_lanes, training_step, ret);
++		if (!ret)
++			return 0;
++
++		msm_dp_ctrl_clear_training_pattern(ctrl, DP_PHY_DPRX);
++		if (attempt == 3 || training_step == DP_TRAINING_NONE ||
++		    !msm_dp_aux_is_link_connected(ctrl->aux))
++			return ret;
++
++		/* Retain the rate/lane count; neither fallback fits this mode. */
++		if (reinitialize) {
++			ret = msm_dp_ctrl_reinitialize_mainlink(ctrl);
++			if (ret)
++				return ret;
++		} else {
++			/* Pixel clocks may be live during retrain/maintenance. */
++			msleep(20);
++		}
++	}
++
++	return -ETIMEDOUT;
++}
++
+ static int msm_dp_ctrl_link_maintenance(struct msm_dp_ctrl_private *ctrl)
+ {
+ 	int ret = 0;
+@@ -2169,7 +2905,10 @@
+ 	ctrl->link->phy_params.p_level = 0;
+ 	ctrl->link->phy_params.v_level = 0;
+ 
+-	ret = msm_dp_ctrl_setup_main_link(ctrl, &training_step);
++	if (msm_dp_ctrl_a14_edp_native(ctrl))
++		ret = msm_dp_ctrl_a14_edp_train(ctrl, false);
++	else
++		ret = msm_dp_ctrl_setup_main_link(ctrl, &training_step);
+ 	if (ret)
+ 		goto end;
+ 
+@@ -2472,11 +3211,32 @@
+ 	if (rc)
+ 		return rc;
+ 
++	rc = msm_dp_ctrl_a14_reset_repeater_chain(ctrl);
++	if (rc) {
++		dev_warn(ctrl->dev, "A14-repeater-reset: failed=%d; no link training\n", rc);
++		goto training_done;
++	}
++
++	rc = msm_dp_ctrl_a14_prepare_link_sink(ctrl);
++	if (rc) {
++		dev_err(ctrl->dev, "A14-DSC-wake: prepare sink failed=%d\n", rc);
++		goto training_done;
++	}
++
++	if (msm_dp_ctrl_a14_edp_native(ctrl)) {
++		rc = msm_dp_ctrl_a14_edp_train(ctrl, !ctrl->stream_clks_on);
++		goto training_done;
++	}
++
+ 	while (--link_train_max_retries) {
+ 		training_step = DP_TRAINING_NONE;
+ 		rc = msm_dp_ctrl_setup_main_link(ctrl, &training_step);
+ 		if (rc == 0) {
+ 			/* training completed successfully */
++			break;
++		} else if (msm_dp_ctrl_a14_wake_enabled(msm_dp_ctrl) &&
++			   training_step == DP_TRAINING_NONE) {
++			/* Checked AUX setup already made its bounded retry. */
+ 			break;
+ 		} else if (training_step == DP_TRAINING_1) {
+ 			/* link train_1 failed */
+@@ -2532,6 +3292,7 @@
+ 		}
+ 	}
+ 
++training_done:
+ 	if (ctrl->link->sink_request & DP_TEST_LINK_PHY_TEST_PATTERN)
+ 		return rc;
+ 
+@@ -2548,6 +3309,7 @@
+ 		 */
+ 		msm_dp_ctrl_clear_training_pattern(ctrl, DP_PHY_DPRX);
+ 
++		msm_dp_ctrl_a14_failed_link_cleanup(ctrl, rc);
+ 		msm_dp_ctrl_deinitialize_mainlink(ctrl);
+ 		rc = -ECONNRESET;
+ 	}
+@@ -2558,6 +3320,9 @@
+ static int msm_dp_ctrl_link_retrain(struct msm_dp_ctrl_private *ctrl)
+ {
+ 	int training_step = DP_TRAINING_NONE;
++
++	if (msm_dp_ctrl_a14_edp_native(ctrl))
++		return msm_dp_ctrl_a14_edp_train(ctrl, false);
+ 
+ 	return msm_dp_ctrl_setup_main_link(ctrl, &training_step);
+ }
+@@ -2688,6 +3453,12 @@
+ 
+ 	ctrl = container_of(msm_dp_ctrl, struct msm_dp_ctrl_private, msm_dp_ctrl);
+ 
++	if (msm_dp_ctrl_a14_edp_native(ctrl) &&
++	    !msm_dp_ctrl_a14_edp_link_fits(ctrl)) {
++		dev_err(ctrl->dev, "A14-eDP-retry: rejecting insufficient trained link\n");
++		return -ENOSPC;
++	}
++
+ 	pixel_rate = pixel_rate_orig = ctrl->panel->msm_dp_mode.drm_mode.clock;
+ 
+ 	if (msm_dp_ctrl->wide_bus_en || ctrl->panel->msm_dp_mode.out_fmt_is_yuv_420)
+diff --git a/drivers/gpu/drm/msm/dp/dp_ctrl.h b/drivers/gpu/drm/msm/dp/dp_ctrl.h
+--- a/drivers/gpu/drm/msm/dp/dp_ctrl.h
++++ b/drivers/gpu/drm/msm/dp/dp_ctrl.h
+@@ -16,6 +16,9 @@
+ 
+ struct phy;
+ 
++bool msm_dp_ctrl_a14_wake_enabled(struct msm_dp_ctrl *msm_dp_ctrl);
++bool msm_dp_ctrl_a14_edp_retry_enabled(struct msm_dp_ctrl *msm_dp_ctrl);
++int msm_dp_ctrl_a14_sink_power(struct msm_dp_ctrl *msm_dp_ctrl, bool on);
+ int msm_dp_ctrl_on_link(struct msm_dp_ctrl *msm_dp_ctrl);
+ int msm_dp_ctrl_on_stream(struct msm_dp_ctrl *msm_dp_ctrl, bool force_link_train);
+ void msm_dp_ctrl_off_link_stream(struct msm_dp_ctrl *msm_dp_ctrl);
+diff --git a/drivers/gpu/drm/msm/dp/dp_display.c b/drivers/gpu/drm/msm/dp/dp_display.c
+--- a/drivers/gpu/drm/msm/dp/dp_display.c
++++ b/drivers/gpu/drm/msm/dp/dp_display.c
+@@ -39,6 +39,16 @@
+ MODULE_PARM_DESC(a14_check_sink_before_link,
+                 "A14 test: require a live AUX sink before external DP link enable");
+ 
++static bool a14_dp_first_aux_probe_test;
++module_param(a14_dp_first_aux_probe_test, bool, 0444);
++MODULE_PARM_DESC(a14_dp_first_aux_probe_test,
++	"Probe LTTPR range before A14 port-one receiver access on inactive starts");
++
++static bool a14_edp_bpp_init_test;
++module_param(a14_edp_bpp_init_test, bool, 0444);
++MODULE_PARM_DESC(a14_edp_bpp_init_test,
++	"Recompute A14 eDP depth from the requested bpp after powered capability reads");
++
+ #define HPD_STRING_SIZE 30
+ 
+ enum {
+@@ -62,6 +72,7 @@
+ 
+ 	/* An AUX preflight failure already released the enable PM reference. */
+ 	bool a14_enable_aborted;
++	u32 a14_requested_bpp;
+ 
+ 	struct mutex plugged_lock;
+ 	bool plugged;
+@@ -274,6 +285,31 @@
+ }
+ 
+ 
++/*
++ * Call only after runtime resume, PHY initialization and AUX enablement.
++ * Use probe(), not readb(): readb() can prepend an access to 0x102.
++ * This follows the LTTPR-before-DPRX ordering in i915. A failed probe is
++ * logged, but does not prevent the existing receiver detection path.
++ */
++static void msm_dp_a14_first_aux_probe(struct msm_dp_display_private *dp,
++				     const char *phase)
++{
++	struct device *dev = &dp->msm_dp_display.pdev->dev;
++	int ret;
++
++	if (!a14_dp_first_aux_probe_test || dp->msm_dp_display.is_edp ||
++	    dp->msm_dp_display.power_on ||
++	    !of_machine_is_compatible("asus,zenbook-a14-ux3407na") ||
++	    !of_device_is_compatible(dev->of_node, "qcom,glymur-dp") ||
++	    strcmp(dev_name(dev), "af54000.displayport-controller"))
++		return;
++
++	ret = drm_dp_dpcd_probe(dp->aux,
++			DP_LT_TUNABLE_PHY_REPEATER_FIELD_DATA_STRUCTURE_REV);
++	dev_info(dev, "A14-first-AUX: phase=%s probe=0xf0000 ret=%d core=%u phy=%u\n",
++		 phase, ret, dp->core_initialized, dp->phy_initialized);
++}
++
+ /* A14 diagnostic: recover only a positively identified stale LTTPR mode. */
+ static int a14_dp_read_caps_recover(struct msm_dp_display_private *dp, u8 *dpcd)
+ {
+@@ -324,6 +360,7 @@
+ 	int rc = 0;
+ 	u8 dpcd[DP_RECEIVER_CAP_SIZE];
+ 
++	msm_dp_a14_first_aux_probe(dp, "hpd");
+ 	rc = a14_dp_read_caps_recover(dp, dpcd);
+ 	if (rc)
+ 		goto end;
+@@ -723,6 +760,10 @@
+ 		 * unplugged interrupt
+ 		 * dongle unplugged out of DUT
+ 		 */
++		/* Connected screen blank/modeset: let the receiver sleep first. */
++		if (READ_ONCE(dp->plugged))
++			msm_dp_ctrl_a14_sink_power(dp->ctrl, false);
++		/* A failed D3 request must not prevent host shutdown. */
+ 		msm_dp_ctrl_off(dp->ctrl);
+ 		msm_dp_display_host_phy_exit(dp);
+ 	}
+@@ -962,6 +1003,7 @@
+ 		goto end;
+ 	}
+ 
++	msm_dp_a14_first_aux_probe(priv, "detect");
+ 	ret = drm_dp_read_dpcd_caps(priv->aux, dpcd);
+ 	if (ret) {
+ 		DRM_DEBUG_DP("failed to read caps\n");
+@@ -1506,6 +1548,50 @@
+ 	return 0;
+ }
+ 
++static bool msm_dp_a14_edp_bpp_enabled(struct msm_dp_display_private *dp)
++{
++	struct device *dev = &dp->msm_dp_display.pdev->dev;
++
++	return a14_edp_bpp_init_test && dp->msm_dp_display.is_edp &&
++		of_machine_is_compatible("asus,zenbook-a14-ux3407na") &&
++		of_device_is_compatible(dev->of_node, "qcom,glymur-dp") &&
++		!strcmp(dev_name(dev), "af6c000.displayport-controller") &&
++		!dp->panel->video_test;
++}
++
++/*
++ * eDP mode_set runs before the powered panel capability read. Do not reuse
++ * its bandwidth-reduced depth: retain the original requested depth and
++ * recompute after successful HPD setup, before on_link/on_stream consume it.
++ * This is uncompressed eDP only; no early panel power or invented caps.
++ */
++static int msm_dp_a14_edp_finalize_bpp(struct msm_dp_display_private *dp)
++{
++	struct msm_dp_panel *panel = dp->panel;
++	u32 before = dp->msm_dp_mode->bpp;
++	u64 capacity, required;
++	int ret;
++
++	if (!panel->link_info.rate || !panel->link_info.num_lanes ||
++	    !dp->a14_requested_bpp || panel->dsc_en ||
++	    dp->msm_dp_mode->out_fmt_is_yuv_420)
++		return -EINVAL;
++
++	dp->msm_dp_mode->bpp = dp->a14_requested_bpp;
++	ret = msm_dp_panel_init_panel_info(panel);
++	if (ret)
++		return ret;
++
++	capacity = (u64)panel->link_info.rate * panel->link_info.num_lanes * 8;
++	required = (u64)dp->msm_dp_mode->drm_mode.clock * dp->msm_dp_mode->bpp;
++	dev_info(&dp->msm_dp_display.pdev->dev,
++		 "A14-eDP-bpp: requested=%u before=%u selected=%u rate=%u lanes=%u fits=%u\n",
++		 dp->a14_requested_bpp, before, dp->msm_dp_mode->bpp,
++		 panel->link_info.rate, panel->link_info.num_lanes,
++		 (unsigned int)(required && required <= capacity));
++	return required && required <= capacity ? 0 : -EINVAL;
++}
++
+ void msm_dp_bridge_atomic_enable(struct drm_bridge *drm_bridge,
+ 				 struct drm_atomic_commit *state)
+ {
+@@ -1524,8 +1610,21 @@
+ 		return;
+ 	}
+ 
+-	if (dp->is_edp)
+-		msm_dp_hpd_plug_handle(msm_dp_display);
++	if (dp->is_edp) {
++		rc = msm_dp_hpd_plug_handle(msm_dp_display);
++		if (msm_dp_a14_edp_bpp_enabled(msm_dp_display)) {
++			if (!rc)
++				rc = msm_dp_a14_edp_finalize_bpp(msm_dp_display);
++			if (rc) {
++				dev_err(&dp->pdev->dev,
++					"A14-eDP-bpp: powered setup failed=%d; aborting enable\n", rc);
++				if (msm_dp_display->plugged)
++					msm_dp_hpd_unplug_handle(msm_dp_display);
++				msm_dp_display->a14_enable_aborted = true;
++				return;
++			}
++		}
++	}
+ 
+ 	if (pm_runtime_resume_and_get(&dp->pdev->dev)) {
+ 		DRM_ERROR("failed to pm_runtime_resume\n");
+@@ -1541,9 +1640,12 @@
+ 	}
+ 
+ 	if (!dp->is_edp && !dp->power_on &&
+-	    of_device_is_compatible(dp->pdev->dev.of_node, "qcom,glymur-dp") &&
+-	    READ_ONCE(a14_check_sink_before_link)) {
+-		rc = msm_dp_a14_check_sink(msm_dp_display);
++	    of_device_is_compatible(dp->pdev->dev.of_node, "qcom,glymur-dp")) {
++		msm_dp_a14_first_aux_probe(msm_dp_display, "enable");
++		/* D0 must precede the capability preflight after an explicit D3. */
++		rc = msm_dp_ctrl_a14_sink_power(msm_dp_display->ctrl, true);
++		if (!rc && READ_ONCE(a14_check_sink_before_link))
++			rc = msm_dp_a14_check_sink(msm_dp_display);
+ 		if (rc) {
+ 			dev_warn(&dp->pdev->dev,
+ 				 "A14-DP: link enable skipped after sink check rc=%d\n", rc);
+@@ -1559,6 +1661,16 @@
+ 	rc = msm_dp_ctrl_on_link(msm_dp_display->ctrl);
+ 	if (rc) {
+ 		DRM_ERROR("Failed link training (rc=%d)\n", rc);
++		if (msm_dp_ctrl_a14_wake_enabled(msm_dp_display->ctrl) ||
++		    msm_dp_ctrl_a14_edp_retry_enabled(msm_dp_display->ctrl)) {
++			/* on_link has shut down its failed training attempt. */
++			if (aux_initialized_here)
++				msm_dp_display_host_phy_exit(msm_dp_display);
++			msm_dp_display->a14_enable_aborted = true;
++			pm_runtime_put_sync(&dp->pdev->dev);
++			dev_warn(&dp->pdev->dev,
++				 "A14-DP: failed enable resources released\n");
++		}
+ 		// TODO: schedule drm_connector_set_link_status_property()
+ 		return;
+ 	}
+@@ -1644,6 +1756,9 @@
+ 
+ 	if (!msm_dp_display->msm_dp_mode->bpp)
+ 		msm_dp_display->msm_dp_mode->bpp = 24; /* Default bpp */
++
++	/* Save before init_panel_info constrains bpp using link capabilities. */
++	msm_dp_display->a14_requested_bpp = msm_dp_display->msm_dp_mode->bpp;
+ 
+ 	drm_mode_copy(&msm_dp_display->msm_dp_mode->drm_mode, adjusted_mode);
+ 
+diff --git a/drivers/soc/qcom/pmic_glink_altmode.c b/drivers/soc/qcom/pmic_glink_altmode.c
+--- a/drivers/soc/qcom/pmic_glink_altmode.c
++++ b/drivers/soc/qcom/pmic_glink_altmode.c
+@@ -24,6 +24,12 @@
+ 
+ #include <linux/soc/qcom/pmic_glink.h>
+ 
++/* Experimental: extend A14 IRQ-only containment to the dock on Type-C port 0. */
++static bool a14_dock_hpd_test;
++module_param_named(a14_dock_hpd_test, a14_dock_hpd_test, bool, 0444);
++MODULE_PARM_DESC(a14_dock_hpd_test,
++	"A14 port 0: suppress IRQ-only hotplug replay after successful DP setup");
++
+ #define PMIC_GLINK_MAX_PORTS	3
+ 
+ #define USBC_SC8180X_NOTIFY_IND	0x13
+@@ -117,6 +123,7 @@
+ 	bool a14_dp_configured;
+ 	enum typec_orientation a14_dp_orientation;
+ 	u8 a14_dp_mode;
++	u8 a14_dp_mux_ctrl;
+ 
+ 	struct typec_switch *typec_switch;
+ 	struct typec_mux *typec_mux;
+@@ -288,6 +295,7 @@
+ 	    port->orientation != TYPEC_ORIENTATION_NONE) {
+ 		port->a14_dp_orientation = port->orientation;
+ 		port->a14_dp_mode = mode;
++		port->a14_dp_mux_ctrl = port->mux_ctrl;
+ 		port->a14_dp_configured = true;
+ 	}
+ }
+@@ -436,6 +444,9 @@
+ {
+ 	struct pmic_glink_altmode *altmode = alt_port->altmode;
+ 	enum drm_connector_status conn_status;
++	bool dock_hpd = alt_port->index == 0 &&
++		READ_ONCE(a14_dock_hpd_test) &&
++		of_machine_is_compatible("asus,zenbook-a14-ux3407na");
+ 
+ 	dev_info(altmode->dev,
+ 		 "A14-DP: WORK port=%u svid=%#x mux=%u mode=%u hpd=%u irq=%u orientation=%u\n",
+@@ -453,7 +464,8 @@
+ 	    alt_port->mux_ctrl == MUX_CTRL_STATE_NO_CONN ||
+ 	    alt_port->orientation == TYPEC_ORIENTATION_NONE ||
+ 	    alt_port->a14_dp_orientation != alt_port->orientation ||
+-	    alt_port->a14_dp_mode != alt_port->mode)
++	    alt_port->a14_dp_mode != alt_port->mode ||
++	    (dock_hpd && alt_port->a14_dp_mux_ctrl != alt_port->mux_ctrl))
+ 		alt_port->a14_dp_configured = false;
+ 
+ 	typec_switch_set(alt_port->typec_switch, alt_port->orientation);
+@@ -463,19 +475,30 @@
+ 	 * separately from a real connector hotplug. Suppress IRQ-only
+ 	 * notifications only after successful DP mux/retimer setup. Initial
+ 	 * HPD-high may carry IRQ_HPD too; it must reach the setup/notify path.
++	 * The dock experiment adds port 0 on UX3407NA only. Do not mistake a
++	 * changed mux configuration for a duplicate; keep real HPD edges.
++	 * This does not implement sink-service IRQ handling in the old API.
+ 	 */
+-	if (alt_port->index == 1 &&
++	if ((alt_port->index == 1 ||
++	     (dock_hpd &&
++	      (alt_port->mux_ctrl == MUX_CTRL_STATE_DP4LN ||
++	       alt_port->mux_ctrl == MUX_CTRL_STATE_USB3_DP))) &&
+ 	    alt_port->svid == USB_TYPEC_DP_SID &&
+ 	    alt_port->hpd_state &&
+ 	    alt_port->hpd_irq && alt_port->a14_dp_configured) {
+-		dev_info_ratelimited(altmode->dev,
+-			"A14-DP: suppressing port 1 IRQ-only HPD notification\n");
++		if (dock_hpd)
++			dev_info_ratelimited(altmode->dev,
++				"A14-dock-HPD: suppressing IRQ-only replay port=%u mode=%u mux=%u\n",
++				alt_port->index, alt_port->mode, alt_port->mux_ctrl);
++		else
++			dev_info_ratelimited(altmode->dev,
++				"A14-DP: suppressing port 1 IRQ-only HPD notification\n");
+ 		pmic_glink_altmode_request(altmode, ALTMODE_PAN_ACK,
+ 					    alt_port->index);
+ 		return;
+ 	}
+ 
+-	if (alt_port->index == 1 &&
++	if ((alt_port->index == 1 || dock_hpd) &&
+ 	    alt_port->svid == USB_TYPEC_DP_SID &&
+ 	    alt_port->mux_ctrl != MUX_CTRL_STATE_NO_CONN &&
+ 	    alt_port->hpd_state && alt_port->hpd_irq &&

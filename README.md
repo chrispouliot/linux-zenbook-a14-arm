@@ -17,7 +17,7 @@ Overall I use this as my daily driver and it works very well. Please note webcam
 
 | Feature | Status | Patches, workarounds or remaining limitations |
 | --- | --- | --- |
-| Internal display | Working with workaround | The eDP link is capped at HBR / 2.7 Gbit/s per lane to address the black screen after suspend. |
+| Internal display | Working with workarounds | The eDP link stays capped at HBR / 2.7 Gbit/s per lane; native 1920×1200 at 60 Hz uses 24 bpp after powered capability setup. Boot and suspend/wake have been tested. |
 | Keyboard and Fn keys | Working with patches | Keyboard Fn-lock support enables the intended media-key and F1–F12 behavior. |
 | Touchpad | Working | Uses the board device tree and early I2C/HID drivers. |
 | Battery information and charging | Working | Uses the ASUS embedded-controller overlay and Qualcomm power-supply support. |
@@ -28,7 +28,7 @@ Overall I use this as my daily driver and it works very well. Please note webcam
 | HDMI audio | Working with patches and configuration | Requires the HDMI audio backend, topology, routing and hotplug helper. |
 | USB peripherals | Working on tested connections | USB clock, power-domain and PHY fixes are included. Selected VIA hubs also use power-management workarounds. This does not establish USB4 support. |
 | Dock Ethernet across suspend/resume | Working with patches on tested dock | Shared USB/DP PHY changes preserve the USB connection in the tested suspend/resume setup. Other docks still need testing. |
-| USB-C DisplayPort / external-display hotplug | Partial | Output works through the tested dock, but direct USB-C DP, hotplug and resume remain experimental. The affected DP1 path is capped at HBR; do not assume unrestricted 4K60 support. |
+| USB-C DisplayPort / external-display hotplug | Working on tested setup; experimental | Port one through the tested Amazon Basics TB4/USB4 dock supports 4K144 with DSC and transparent LTTPR. Boot, standby, suspend and replug have passed on that setup. The second external controller retains an HBR2 cap; other docks and cable orientations still need testing. See [display status](docs/display/README.md). |
 | Suspend/resume | Working with workarounds; setup-dependent | Uses s2idle, the internal-display link cap, USB-C power-domain retention and display/PHY fixes. External displays, docks and audio need testing in each setup. |
 | CPU performance | Partial | CPU governors are available, but single-core performance remains below Windows in testing. The optional SCMI mailbox patch is diagnostic, not a proven fix. |
 | Webcam | Not working | Not supported by the current project configuration. |
@@ -1532,7 +1532,7 @@ You have already completed the ISO-building and USB-writing steps. The same USB 
 
 ## Included patches
 
-These are the project's additions to the pinned Glymur kernel, including device-tree and audio files and the changes applied directly by `kernel.nix`. Some display workarounds remain experimental. The SCMI mailbox patch and fixed-address ramoops diagnostics are **opt-in**; other retained DP diagnostics remain part of the baseline.
+These are the project's additions to the pinned Glymur kernel, including device-tree and audio files and the platform transformations in `kernel/a14-post-patch.nix`. Some display workarounds remain experimental. The four display patches form an ordered series and are not independent opt-in features; see [display integration and validation](docs/display/README.md). The SCMI mailbox patch and fixed-address ramoops diagnostics are **opt-in**; other retained DP diagnostics remain part of the baseline.
 
 <details>
 <summary><strong>Show all patches and hardware adjustments</strong></summary>
@@ -1548,26 +1548,31 @@ These are the project's additions to the pinned Glymur kernel, including device-
 | [`a14-glymur-ucsi-dp-mux-race.patch`](patches/a14-glymur-ucsi-dp-mux-race.patch) | Prevents a UCSI USB-mode notification from overwriting the DisplayPort mux selection on Glymur. |
 | [`a14-dp-hpd-replay.patch`](patches/a14-dp-hpd-replay.patch) | Remembers display hotplug state and replays it when the DRM bridge enables notifications, covering early boot events. |
 | [`a14-dp-usb-preserve-bank0.patch`](patches/a14-dp-usb-preserve-bank0.patch) | Preserves USB-sensitive bank0 transmitter controls during the affected USB+DP startup sequence to avoid disrupting dock USB/Ethernet. |
+| [`a14-display-dsc.patch`](patches/a14-display-dsc.patch) | Adds the DSC/FEC pipeline and 4K144 mode support. Apply with the rest of the ordered display series. |
+| [`a14-display-lifecycle.patch`](patches/a14-display-lifecycle.patch) | Retains wake, AUX, HPD and link teardown corrections, diagnostics, and gated alternatives. |
+| [`a14-display-transparent-lttpr.patch`](patches/a14-display-transparent-lttpr.patch) | Selects transparent repeater training for the guarded A14 port-one two-repeater dock topology. |
+| [`a14-display-edp-depth.patch`](patches/a14-display-edp-depth.patch) | Finalizes the native internal panel's colour depth after powered capability setup, preserving its HBR link cap. |
+| [Legacy dock recovery v4](display/options/dock-recovery-v4.nix) — optional | Overrides the personal v3 boot service only if its existing option is enabled. Currently disabled in the tested personal configuration; a docked boot passed without it and without the 30-second grace period. |
 | [`a14-scmi-mailbox-set-test.patch`](patches/a14-scmi-mailbox-set-test.patch) — opt-in | Tests CPU performance requests through SCMI mailbox messages instead of fast-channel writes. It is not a proven performance fix. |
-| [External DP1 link limit](kernel.nix#L73) | Caps the affected external DisplayPort controller at 2.7 Gbit/s per lane as a link-training workaround. |
-| [Stereo speaker backend](kernel.nix#L110) | Restricts the WSA backend to two channels while retaining the existing four-channel audio frontend. |
-| [Keyboard Fn-lock support](kernel.nix#L195) | Enables Fn-lock for the Zenbook keyboard, with media/brightness keys used directly and Fn for F1–F12. |
-| [PMIC GLINK event logging](kernel.nix#L271) | Logs received and processed USB-C/display events to diagnose ordering and combined notifications. |
-| [Display hotplug interrupt containment](kernel.nix#L415) | Suppresses repeated IRQ-only notifications on the affected external port while retaining real plug/unplug events. |
-| [Display connection and resume handling](kernel.nix#L477) | Avoids duplicate display discovery, cleans up failed connections, and forces external DP PHY reinitialization after suspend. |
-| [DisplayPort bandwidth calculation](kernel.nix#L594) | Checks modes against actual physical-link capacity instead of treating the internal wide-bus optimization as extra bandwidth. |
-| [AUX wrong-data-count handling](kernel.nix#L663) | Completes malformed AUX transfers with an error so DRM can retry promptly instead of waiting for a timeout. |
-| [Glymur PHY programming corrections](kernel.nix#L793) | Uses orientation-aware DP programming and preserves the required AUX configuration value during PHY startup. |
-| [PHY startup diagnostics](kernel.nix#L812) | Adds register and timeout diagnostics, including an extended 50 ms C_READY wait for investigating startup failures. |
-| [PHY and link-clock error handling](kernel.nix#L738) | Propagates startup failures and unwinds PHY power when a later stage fails, reducing invalid teardown sequences. |
-| [USB-C power-domain retention](kernel.nix#L1257) | Keeps both USB-C controller and combo-PHY power domains on across suspend to avoid controller faults and stalled display resume. |
-| [Retained display disconnect events](kernel.nix#L1368) | Preserves a pending disconnect before the latest reconnect state, using stable worker snapshots and matching bridge replay. |
-| [SAFE-detach workaround](kernel.nix#L1591) — experimental | Defers shared-PHY reinitialization during a USB-C SAFE notification, leaving normal USB/DP teardown to release it. |
-| [Live display check before link enable](kernel.nix#L1677) — experimental | Checks that an external display still responds over AUX before restoring its link, and cleans up if it has disappeared. |
+| [External DP1 link limit](kernel/a14-post-patch.nix) | Caps the second external controller (`mdss_dp1`, af5c000) at HBR2 / 5.4 Gbit/s per lane. The working port-one dock path uses af54000 and can negotiate HBR3. |
+| [Stereo speaker backend](kernel/a14-post-patch.nix) | Restricts the WSA backend to two channels while retaining the existing four-channel audio frontend. |
+| [Keyboard Fn-lock support](kernel/a14-post-patch.nix) | Enables Fn-lock for the Zenbook keyboard, with media/brightness keys used directly and Fn for F1–F12. |
+| [PMIC GLINK event logging](kernel/a14-post-patch.nix) | Logs received and processed USB-C/display events to diagnose ordering and combined notifications. |
+| [Display hotplug interrupt containment](kernel/a14-post-patch.nix) | Suppresses repeated IRQ-only notifications on the affected external port while retaining real plug/unplug events. |
+| [Display connection and resume handling](kernel/a14-post-patch.nix) | Avoids duplicate display discovery, cleans up failed connections, and forces external DP PHY reinitialization after suspend. |
+| [DisplayPort bandwidth calculation](kernel/a14-post-patch.nix) | Checks modes against actual physical-link capacity instead of treating the internal wide-bus optimization as extra bandwidth. |
+| [AUX wrong-data-count handling](kernel/a14-post-patch.nix) | Completes malformed AUX transfers with an error so DRM can retry promptly instead of waiting for a timeout. |
+| [Glymur PHY programming corrections](kernel/a14-post-patch.nix) | Uses orientation-aware DP programming and preserves the required AUX configuration value during PHY startup. |
+| [PHY startup diagnostics](kernel/a14-post-patch.nix) | Adds register and timeout diagnostics, including an extended 50 ms C_READY wait for investigating startup failures. |
+| [PHY and link-clock error handling](kernel/a14-post-patch.nix) | Propagates startup failures and unwinds PHY power when a later stage fails, reducing invalid teardown sequences. |
+| [USB-C power-domain retention](kernel/a14-post-patch.nix) | Keeps both USB-C controller and combo-PHY power domains on across suspend to avoid controller faults and stalled display resume. |
+| [Retained display disconnect events](kernel/a14-post-patch.nix) | Preserves a pending disconnect before the latest reconnect state, using stable worker snapshots and matching bridge replay. |
+| [SAFE-detach workaround](kernel/a14-post-patch.nix) — experimental | Defers shared-PHY reinitialization during a USB-C SAFE notification, leaving normal USB/DP teardown to release it. |
+| [Live display check before link enable](kernel/a14-post-patch.nix) — experimental | Checks that an external display still responds over AUX before restoring its link, and cleans up if it has disappeared. |
 | [Audio UCM and speaker routing](modules/audio.nix) | Removes nonexistent speaker paths, maps stereo audio to the populated channels, and provides configurable speaker gain. |
 | [HDMI audio hotplug helper](modules/audio.nix) | Creates an HDMI output only while connected, keeping disconnected HDMI from breaking internal audio discovery. |
 | [USB and audio autosuspend rules](modules/default.nix) | Keeps the affected SoundWire device and selected VIA USB hubs awake to avoid wake/reconnect problems. |
-| [Kernel configuration](kernel.nix#L10) | Enables platform drivers and diagnostic support, and disables Rust for the pinned snapshot's Rust/RCU build mismatch. |
+| [Kernel configuration](kernel.nix) | Enables platform drivers and diagnostic support, and disables Rust for the pinned snapshot's Rust/RCU build mismatch. |
 | [Ramoops crash capture](modules/ramoops.nix) — opt-in | Adds the original reserved-memory crash logger and collection helper, only for the specifically validated 32 GiB memory layout. |
 | [Installer device-tree support](vendor/README.md) | Adds the board device tree to the ISO and its GRUB boot entries so the installer starts with the correct hardware description. |
 

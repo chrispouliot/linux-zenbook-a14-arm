@@ -2036,8 +2036,11 @@ print("A14 repeater experiment applied: recovery only after failed dock capabili
 
 PY
 
-      # Consolidated display stack; applies after the platform transformations.
-      patch --batch --forward --fuzz=0 -p1 < ${../patches/a14-display-stack.patch}
+      # Display series: all four patches are required, in this order.
+      patch --batch --forward --fuzz=0 -p1 < ${../patches/a14-display-dsc.patch}
+      patch --batch --forward --fuzz=0 -p1 < ${../patches/a14-display-lifecycle.patch}
+      patch --batch --forward --fuzz=0 -p1 < ${../patches/a14-display-transparent-lttpr.patch}
+      patch --batch --forward --fuzz=0 -p1 < ${../patches/a14-display-edp-depth.patch}
 
       echo "All ASUS A14 kernel patches applied successfully"
 ''
