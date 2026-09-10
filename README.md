@@ -4,9 +4,16 @@ Linux/NixOS hardware support for the **ASUS Zenbook A14 UX3407NA with Snapdragon
 
 The project builds an ARM64 NixOS installer ISO, which can be used to install either NixOS or Arch on your A14. It currently uses the pinned **7.2.0-rc5-next-20260731** Glymur kernel. Support is still evolving; see the [hardware notes](docs/hardware.md) for current limitations, including external display link limits. Earlier Snapdragon X1 A14 models are outside this project's scope.
 
-## Current hardware status
+This project is not responsible for the initial device tree mainlining or A14 support. This project builds on the existing work of others and exists mainly a guide with my own small personal patches to help others get Linux on their A14. Huge thank you to the Linux-MSM and Glymur kernel for the work to get the A14 up and running with Linux.
+
+<details>
+<summary><strong>Current hardware status</strong></summary>
+
 
 Status reflects the currently used **NixOS configuration on the UX3407NA with the project's patched Glymur kernel and required firmware**. It does not mean the new installer ISO or every peripheral has been validated. Arch users also need the equivalent userspace configuration, particularly for audio.
+
+Overall I use this as my daily driver and it works very well. Please note webcam/microphone are not yet working and the USB 4 limitations.
+
 
 | Feature | Status | Patches, workarounds or remaining limitations |
 | --- | --- | --- |
@@ -30,6 +37,8 @@ Status reflects the currently used **NixOS configuration on the UX3407NA with th
 
 See [Included patches](#included-patches) for individual changes and [hardware notes](docs/hardware.md) for options and limitations. “Working” describes the tested setup, not a guarantee that all hardware combinations are issue-free.
 
+</details>
+
 ## Before you start
 
 You can create the ISO on **another Linux computer**, or **on the A14 itself while it is running Windows by using WSL2**. Both routes use Nix with flakes enabled; the guides include the setup steps. If the A14 is your only computer, start with the Windows installation steps. You will need the **Windows firmware files from your UX3407NA**. Follow the [firmware guide](docs/firmware.md), which includes collectors for Windows and Linux.
@@ -43,7 +52,8 @@ Firmware is required by both the installer and the installed system. Keep a back
 <details>
 <summary><strong>Before booting the installer: Windows encryption, PIN, BIOS and boot menu</strong></summary>
 
-Read this before changing Secure Boot, whether you built the ISO on another computer or through WSL on the A14. If using WSL, finish building and writing the USB first; perform the encryption and firmware steps immediately before testing the USB.
+Windows Bitlocker won't function properly if you disable Secure Boot (required to boot Linux).
+Read this before changing Secure Boot in your BIOS, whether you built the ISO on another computer or through WSL on the A14. If using WSL, finish building and writing the USB first; perform the encryption and firmware steps immediately before testing the USB.
 
 **BitLocker recovery and your Windows sign-in PIN are different things.** Suspending BitLocker protection helps avoid recovery prompts caused by boot or firmware changes. It does not guarantee that Windows Hello will keep accepting your PIN. Fully decrypting the drive does not guarantee that either.
 
