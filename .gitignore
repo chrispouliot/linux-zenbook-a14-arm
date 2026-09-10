@@ -6,3 +6,6 @@ firmware/*
 !firmware/README.md
 private-firmware/
 .direnv/*
+
+# Firmware ACPI dumps from tools/a14-acpi-dump.py (machine-specific, not for the repo)
+acpi-tables/

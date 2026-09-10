@@ -85,8 +85,11 @@ hardware. Keeping the patch body intact is deliberate for this initial release.
 
 ## Camera (experimental)
 
-`experimental.camera.enable` adds the front camera as an untested, opt-in
-build. Three parts are involved:
+`experimental.camera.enable` adds the front camera as an opt-in build. It
+works on the UX3407NA: 1920x1092 at 30 fps through the software ISP on the
+GPU, tested with `cam` and GNOME Snapshot. The privacy LED wiring is in the
+board description but has not been observed on hardware yet.
+Three parts are involved:
 
 - **Driver backports** (`patches/camera/`): fifteen commits taken from
   linux-msm `topic/glymur-laptops` and the September 2026 upstream Glymur
@@ -97,14 +100,26 @@ build. Three parts are involved:
   CSIPHY, CCI and MCLK nodes to the SoC device tree. Glymur's camera block is
   a subset of the X1E80100 one, so the CAMSS driver change is small.
 - **Board description** (`patches/a14-camera.dtsi`): the OV02C10 sensor at
-  0x36 on CCI1 bus 1, MCLK4, reset on GPIO 239, CSIPHY4 with two lanes, and a
-  PM8010 camera PMIC at 0x08 on i2c5 with reset on GPIO 106. This is the
-  Zenbook A16 and CRD wiring. Only the CSIPHY rails are known to match the A14;
-  the rest is an assumption until the A14's ACPI tables confirm it.
+  0x36 on CCI1 bus 1, MCLK4, reset on GPIO 239, CSIPHY4 with two lanes, a
+  PM8010 camera PMIC at 0x08 on i2c5 with reset on GPIO 106, and the camera
+  privacy LED on GPIO 111, which the V4L2 core lights while the sensor
+  streams. This is the Zenbook A16 and CRD wiring. The A14's own firmware
+  tables confirm the PMIC address and bus (device PML0 on the controller at
+  0xb94000), the LED GPIO (device CAMP), and the CSIPHY set (device MPCS); the
+  PMIC and sensor both probed on hardware. The firmware does not describe the
+  PMIC reset GPIO or the sensor's LDO mapping, so those remain the A16 values.
+  The firmware also enables a second sensor device, CAMI, presumably the IR
+  camera for Windows Hello; it is not wired up.
 - **Userspace** (`modules/camera.nix`): libcamera and v4l-utils, with PipeWire
   and WirePlumber kept on. CAMSS produces raw Bayer frames; libcamera's simple
   pipeline handler and software ISP convert them, and applications use the
   camera through PipeWire. Firefox needs `media.webrtc.camera.allow-pipewire`.
+  The module also gives the `video` group access to `/dev/udmabuf`, which the
+  software ISP needs for its buffers. Without it WirePlumber, which enumerates
+  the camera at login, can run before logind's seat ACL exists, the ISP setup
+  fails and the PipeWire camera offers no formats, so applications report no
+  camera. Your user must be in the `video` group. If that happens anyway,
+  `systemctl --user restart wireplumber` recreates the node.
 
 Kernel configuration: the pinned kernel already builds CAMSS, CCI, the camera
 clock controller, the PM8008 drivers and the OV02C10 driver as modules; the
@@ -121,21 +136,25 @@ option adds the new `PHY_QCOM_MIPI_CSI2` module and pins the rest explicitly.
    is wrong. A CCI transfer timeout means the sensor is unpowered or on the
    other bus.
 4. `media-ctl -p`, then `cam -l` and `cam -c1 -C10`. Afterwards `wpctl status`
-   should list an `ov02c10` libcamera source.
+   should list an `ov02c10` libcamera source, and `pw-cli enum-params <id>
+   EnumFormat` on that source should print RGB formats. An empty format list
+   means the software ISP did not start inside WirePlumber; check
+   `journalctl --user -b -u wireplumber` for SoftwareIsp or DmaBufAllocator
+   errors.
 
 ### If it does not probe: dump the ACPI tables
 
 The Windows firmware describes the camera PMIC (I2C address, controller and
-reset GPIO), the camera GPIOs and the CSIPHY in the DSDT. On this device-tree
-boot `acpidump` finds the tables through `/sys/firmware/efi/systab` but needs
-`/dev/mem`, which `STRICT_DEVMEM` blocks because the firmware places the
-tables inside memory the kernel counts as RAM. Build once with
-`diagnostics.unrestrictedDevmem = true`, boot it, then:
+reset GPIO), the camera GPIOs including the privacy LED, and the CSIPHY in the
+DSDT. On this device-tree boot the tables are only reachable through
+`/dev/mem`: `acpidump` cannot be used because it insists on the missing
+`/sys/firmware/acpi` directory, and `STRICT_DEVMEM` blocks the read because
+the firmware places the tables inside memory the kernel counts as RAM. Build
+once with `diagnostics.unrestrictedDevmem = true`, boot it, then:
 
 ```bash
-nix shell nixpkgs#acpica-tools
-sudo acpidump -c off -b
-iasl -d dsdt.dat
+sudo python3 tools/a14-acpi-dump.py      # RSDP from /sys/firmware/efi/systab, writes ./acpi-tables/
+nix shell nixpkgs#acpica-tools -c iasl -d acpi-tables/dsdt.dat
 ```
 
 Turn the option off again afterwards. In `dsdt.dsl`, look for the camera

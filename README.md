@@ -12,7 +12,7 @@ This project is not responsible for the initial device tree mainlining or A14 su
 
 Status reflects the currently used **NixOS configuration on the UX3407NA with the project's patched Glymur kernel and required firmware**. It does not mean the new installer ISO or every peripheral has been validated. Arch users also need the equivalent userspace configuration, particularly for audio.
 
-Overall I use this as my daily driver and it works very well. Please note webcam/microphone are not yet working and the USB 4 limitations.
+Overall I use this as my daily driver and it works very well. Please note the webcam is an opt-in experimental build and the USB 4 limitations.
 
 
 | Feature | Status | Patches, workarounds or remaining limitations |
@@ -31,8 +31,8 @@ Overall I use this as my daily driver and it works very well. Please note webcam
 | USB-C DisplayPort / external-display hotplug | Working on tested setup; experimental | Port one through the tested Amazon Basics TB4/USB4 dock supports 4K144 with DSC and transparent LTTPR. Boot, standby, suspend and replug have passed on that setup. The second external controller retains an HBR2 cap; other docks and cable orientations still need testing. See [display status](docs/display/README.md). |
 | Suspend/resume | Working with workarounds; setup-dependent | Uses s2idle, the internal-display link cap, USB-C power-domain retention and display/PHY fixes. External displays, docks and audio need testing in each setup. |
 | CPU performance | Partial | CPU governors are available, but single-core performance remains below Windows in testing. The optional SCMI mailbox patch is diagnostic, not a proven fix. |
-| Webcam | Experimental, opt-in, untested | Backported Glymur camera drivers and an unverified board description copied from the Zenbook A16, behind `experimental.camera.enable`. Not yet validated on hardware; see [camera notes](docs/hardware.md#camera-experimental). |
-| Internal microphone | Not working | Not working in the current configuration, despite the microphone-related paths present in the audio topology. |
+| Webcam | Working with patches; opt-in | Backported Glymur camera drivers, a board description confirmed against the A14 firmware tables, and libcamera's software ISP through PipeWire, behind `experimental.camera.enable`. Tested in GNOME Snapshot. The privacy LED wiring is included but still awaiting its first boot; see [camera notes](docs/hardware.md#camera-experimental). |
+| Internal microphone | Working | Uses the microphone paths in the AudioReach topology and the always-on Speaker + Mic UCM tree. Verified with a PipeWire recording and playback. |
 | USB4 | Not working | Native USB4 operation is not working. USB peripherals or display output working through a USB4-capable dock does not mean its USB4 features are operating. |
 
 See [Included patches](#included-patches) for individual changes and [hardware notes](docs/hardware.md) for options and limitations. “Working” describes the tested setup, not a guarantee that all hardware combinations are issue-free.

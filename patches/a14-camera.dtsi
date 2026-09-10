@@ -1,27 +1,53 @@
 /*
- * EXPERIMENTAL, UNVERIFIED: ASUS Zenbook A14 UX3407NA (Glymur) front RGB camera.
+ * EXPERIMENTAL: ASUS Zenbook A14 UX3407NA (Glymur) front RGB camera.
  *
  * Appended to the board dts by kernel/a14-camera-post-patch.nix when
  * hardware.asus.zenbookA14.experimental.camera.enable is set.
  *
- * The wiring is copied from two boards that share Qualcomm's reference
- * camera layout: the Glymur CRD (upstream "Add CCI and CAMSS support for
- * Glymur" DTS series, 2026-09-07) and the Zenbook A16 UX3607OA camera
- * commit on linux-msm topic/glymur-laptops (3e050b87349a). Both use an
- * OV02C10 at 0x36 on CCI1 bus 1 (asc_cci, GPIO 235/236), MCLK4 on GPIO 100,
- * sensor reset on GPIO 239, CSIPHY4 with two data lanes, and a PM8010
- * camera PMIC at 0x08 on QUP i2c5 with its reset on GPIO 106.
+ * The wiring follows Qualcomm's reference camera layout as used by the Glymur
+ * CRD (upstream "Add CCI and CAMSS support for Glymur" DTS series, 2026-09-07)
+ * and the Zenbook A16 UX3607OA (linux-msm topic/glymur-laptops). Checked
+ * against the A14's own firmware tables (DSDT devices PML0, CAMP, MPCS) and on
+ * hardware, 2026-09-10:
  *
- * None of this has been checked against the A14's own ACPI tables yet.
- * The CSIPHY rails are the only values known to match: the A14 dts already
- * defines the same F_E1 LDOs at the same voltages as the A16.
+ * - Camera PMIC PML0: I2C address 0x08 at 100 kHz on the controller at
+ *   0xb94000, which is i2c5. Probed as a PM8010.
+ * - Camera platform CAMP: CCI0 and CCI1 register windows, GPIO 99 (shared,
+ *   pull-up; MCLK3 pin, purpose unknown) and GPIO 111 (exclusive, no pull),
+ *   which is the camera privacy LED as on the A16.
+ * - CSIPHY MPCS: CSIPHY0, CSIPHY1 and CSIPHY4, interrupts matching glymur.dtsi.
+ * - OV02C10 at 0x36 on CCI1 bus 1 probed and identified itself, so MCLK4,
+ *   the reset GPIO 239 and the PM8010 rails below power it correctly.
+ *
+ * Not described by the firmware tables: the PM8010 reset GPIO (106 on the CRD
+ * and A16; the driver only deasserts it) and the exact LDO-to-rail mapping
+ * (taken from the A16). The firmware also enables a second sensor device,
+ * CAMI, presumably the IR camera for Windows Hello; it is not described here.
  */
 
+#include <dt-bindings/leds/common.h>
 #include <dt-bindings/media/video-interfaces.h>
 
-/* Camera PMIC. Unverified: bus (i2c5), address (0x08) and reset GPIO (106). */
+/ {
+	leds {
+		compatible = "gpio-leds";
+
+		pinctrl-0 = <&cam_indicator_en>;
+		pinctrl-names = "default";
+
+		/* Lit by the V4L2 core while the sensor streams. */
+		privacy_led: privacy-led {
+			function = LED_FUNCTION_INDICATOR;
+			color = <LED_COLOR_ID_WHITE>;
+			gpios = <&tlmm 111 GPIO_ACTIVE_HIGH>;
+			default-state = "off";
+		};
+	};
+};
+
+/* Camera PMIC, firmware device PML0: 0x08 at 100 kHz on i2c5. */
 &i2c5 {
-	clock-frequency = <400000>;
+	clock-frequency = <100000>;
 
 	status = "okay";
 
@@ -44,7 +70,7 @@
 		#thermal-sensor-cells = <0>;
 
 		regulators {
-			/* L1/L2 and L5/L6 are unused on the A16. Unverified for the A14. */
+			/* L1/L2 and L5/L6 are unused on the A16. */
 			vreg_l3m: ldo3 {
 				regulator-name = "vreg_l3m";
 				regulator-min-microvolt = <2800000>;
@@ -82,7 +108,7 @@
 };
 
 &cci1_i2c1 {
-	/* Unverified: sensor model, address and reset GPIO. */
+	/* Front RGB sensor, firmware device CAMF. */
 	camera@36 {
 		compatible = "ovti,ov02c10";
 		reg = <0x36>;
@@ -97,7 +123,10 @@
 
 		orientation = <0>;
 
-		/* Unverified rails. The A16 feeds AVDD from L7 (2.8 V) and DOVDD/DVDD from L4 (1.8 V). */
+		leds = <&privacy_led>;
+		led-names = "privacy";
+
+		/* A16 mapping: AVDD from L7 (2.8 V), DOVDD and DVDD from L4 (1.8 V). */
 		avdd-supply = <&vreg_l7m>;
 		dovdd-supply = <&vreg_l4m>;
 		dvdd-supply = <&vreg_l4m>;
@@ -128,6 +157,13 @@
 };
 
 &tlmm {
+	cam_indicator_en: cam-indicator-en-state {
+		pins = "gpio111";
+		function = "gpio";
+		drive-strength = <2>;
+		bias-disable;
+	};
+
 	cam_reset4_default: cam-reset4-default-state {
 		pins = "gpio239";
 		function = "gpio";
