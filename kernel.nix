@@ -2153,6 +2153,10 @@ PY
       patch --batch --forward --fuzz=0 -p1 < ${./patches/a14-dp-transparent-test.patch}
       # END A14 transparent experiment v1
 
+      # BEGIN A14 eDP depth experiment v1
+      patch --batch --forward --fuzz=0 -p1 < ${./patches/a14-edp-depth-test.patch}
+      # END A14 eDP depth experiment v1
+
       echo "All ASUS A14 kernel patches applied successfully"
     '';
   });

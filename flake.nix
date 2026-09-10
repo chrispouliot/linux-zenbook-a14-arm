@@ -90,6 +90,9 @@
           # BEGIN A14 transparent experiment v1
           ./experiments/a14-transparent/nixos.nix
           # END A14 transparent experiment v1
+          # BEGIN A14 eDP depth experiment v1
+          ./experiments/a14-edp-depth/nixos.nix
+          # END A14 eDP depth experiment v1
           # END A14 AUX wake experiment v1
           # END A14 DSC wake experiment v1
           # END A14 DSC 144Hz extension v1
