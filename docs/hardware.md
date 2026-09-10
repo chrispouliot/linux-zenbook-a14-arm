@@ -11,13 +11,6 @@ The kernel is `linux-msm/laptops-kernel` revision
 It retains USB bring-up, the populated speaker-codec mapping, internal eDP HBR
 limit, external DP1 HBR limit, Fn-lock changes, DP/PHY fixes, and suspend handling.
 
-The external DP1 HBR limit is still present. Do not advertise unrestricted
-high-bandwidth external display modes such as 4K60 on that path. The source
-contains substantial ongoing DP debugging/workaround code. Direct USB-C DP,
-docks and suspend require testing with the actual peripherals and cable
-orientation. No new claim about camera, hardware video decoding, or Windows
-performance parity is made by this packaging.
-
 The default module enables corrected audio routing with unity gain. The source
 file named `a14-audio-left-only.dtsi` is retained literally; the accompanying
 audio configuration explains that the two populated codecs map to the physical
