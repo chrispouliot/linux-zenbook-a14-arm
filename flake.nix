@@ -43,62 +43,12 @@
         ] ++ extraModules;
       };
     in {
-      # BEGIN A14 DSC 4K60 experiment v1
       nixosModules.default = {
         imports = [
           (import ./modules inputs)
-          ./experiments/a14-dsc-4k60/nixos.nix
-          # BEGIN A14 DSC 144Hz extension v1
-          ./experiments/a14-dsc-144/nixos.nix
-          # BEGIN A14 DSC wake experiment v1
-          ./experiments/a14-dsc-wake/nixos.nix
-          # BEGIN A14 AUX wake experiment v1
-          ./experiments/a14-aux-wake/nixos.nix
-          # BEGIN A14 dock HPD experiment v1
-          ./experiments/a14-dock-hpd/nixos.nix
-          # END A14 dock HPD experiment v1
-          # BEGIN A14 eDP retry experiment v1
-          ./experiments/a14-edp-retry/nixos.nix
-          # END A14 eDP retry experiment v1
-          # BEGIN A14 paired config experiment v1
-          ./experiments/a14-pair-config/nixos.nix
-          # END A14 paired config experiment v1
-          # BEGIN A14 sink power experiment v1
-          ./experiments/a14-sink-power/nixos.nix
-          # END A14 sink power experiment v1
-          # BEGIN A14 state trace experiment v1
-          ./experiments/a14-state-trace/nixos.nix
-          # END A14 state trace experiment v1
-          # BEGIN A14 config reuse experiment v1
-          ./experiments/a14-config-reuse/nixos.nix
-          # END A14 config reuse experiment v1
-          # BEGIN A14 repeater restore experiment v1
-          ./experiments/a14-repeater-restore/nixos.nix
-          # END A14 repeater restore experiment v1
-          # BEGIN A14 dock recovery v4 experiment v1
-          ./experiments/a14-dock-recovery-v4/nixos.nix
-          # END A14 dock recovery v4 experiment v1
-          # BEGIN A14 sink cleanup experiment v1
-          ./experiments/a14-sink-cleanup/nixos.nix
-          # END A14 sink cleanup experiment v1
-          # BEGIN A14 review theories experiment v1
-          ./experiments/a14-review-theories/nixos.nix
-          # END A14 review theories experiment v1
-          # BEGIN A14 repeater reset experiment v1
-          ./experiments/a14-repeater-reset/nixos.nix
-          # END A14 repeater reset experiment v1
-          # BEGIN A14 transparent experiment v1
-          ./experiments/a14-transparent/nixos.nix
-          # END A14 transparent experiment v1
-          # BEGIN A14 eDP depth experiment v1
-          ./experiments/a14-edp-depth/nixos.nix
-          # END A14 eDP depth experiment v1
-          # END A14 AUX wake experiment v1
-          # END A14 DSC wake experiment v1
-          # END A14 DSC 144Hz extension v1
+          ./display
         ];
       };
-      # END A14 DSC 4K60 experiment v1
       nixosModules.asus-zenbook-a14-ux3407na = self.nixosModules.default;
       nixosModules.installer = import ./modules/installer.nix inputs;
       lib = {
