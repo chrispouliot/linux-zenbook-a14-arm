@@ -1,0 +1,70 @@
+Subject: [PATCH] clk: qcom: test A14 USB-A controller domain retention
+
+USB-A works after pm_test=devices, but pm_test=platform reproduces SMMU
+stream 0xda0 write translation faults and xHCI Host System Error, without
+entering actual s2idle. A prior XHCI_RESET_ON_RESUME experiment timed out
+and caused watchdog/RCU stalls; it is removed from this experiment.
+
+The a400000 multiport controller uses GCC_USB30_MP_GDSC. Unlike the USB-C
+domains retained by the existing patch set, this domain can power off in
+the genpd noirq path. Test keeping only this controller domain on, gated
+to the A14 board. The existing generic PM domain code then skips domain
+power-off. Device clocks, PHY domains and xHCI PM callbacks are unchanged.
+
+This is a power-retention workaround experiment, not a proven root-cause
+fix. It may increase runtime and suspend power. It does not establish
+whether DMA state, context retention, or power sequencing is responsible.
+Disable at boot with gcc_glymur.a14_usba_keep_power=0.
+
+--- a/drivers/clk/qcom/gcc-glymur.c
++++ b/drivers/clk/qcom/gcc-glymur.c
+@@ -5,6 +5,7 @@
+ 
+ #include <linux/clk-provider.h>
+ #include <linux/module.h>
++#include <linux/of.h>
+ #include <linux/platform_device.h>
+ #include <linux/regmap.h>
+ 
+@@ -7803,6 +7804,19 @@
+ 	},
+ 	.pwrsts = PWRSTS_OFF_ON,
+ 	.flags = POLL_CFG_GDSCR | RETAIN_FF_ENABLE,
++};
++
++/* A14-only alternate descriptor, selected before domain registration. */
++static struct gdsc gcc_usb30_mp_a14_gdsc = {
++	.gdscr = 0x9a010,
++	.en_rest_wait_val = 0x2,
++	.en_few_wait_val = 0x2,
++	.clk_dis_wait_val = 0xf,
++	.pd = {
++		.name = "gcc_usb30_mp_gdsc",
++	},
++	.pwrsts = PWRSTS_OFF_ON,
++	.flags = POLL_CFG_GDSCR | RETAIN_FF_ENABLE | ALWAYS_ON,
+ };
+ 
+ static struct gdsc gcc_usb30_prim_gdsc = {
+@@ -8573,8 +8587,21 @@
+ };
+ MODULE_DEVICE_TABLE(of, gcc_glymur_match_table);
+ 
++/* Probe-time only: generic power-domain flags must not change live. */
++static bool a14_usba_keep_power = true;
++module_param(a14_usba_keep_power, bool, 0444);
++MODULE_PARM_DESC(a14_usba_keep_power,
++        "Keep the A14 USB-A controller power domain on for suspend diagnosis");
++
+ static int gcc_glymur_probe(struct platform_device *pdev)
+ {
++	if (a14_usba_keep_power &&
++	    of_machine_is_compatible("asus,zenbook-a14-ux3407na")) {
++		gcc_glymur_gdscs[GCC_USB30_MP_GDSC] = &gcc_usb30_mp_a14_gdsc;
++		dev_info(&pdev->dev,
++			 "A14-USBA-power: keeping gcc_usb30_mp_gdsc on (experimental)\n");
++	}
++
+ 	return qcom_cc_probe(pdev, &gcc_glymur_desc);
+ }
+ 

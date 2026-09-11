@@ -160,11 +160,15 @@
       echo "Applying A14 dock repeater recovery experiment"
       patch --batch --forward --fuzz=0 -p1 < ${../patches/platform/18-repeater-caps-recovery.patch}
 
-      # Display series: all four patches are required, in this order.
+      # A14 USB-A domain retention experiment; see docs/USBA-POWER-TEST.md.
+      patch --batch --forward --fuzz=0 -p1 < ${../patches/platform/19-usba-power-retention.patch}
+
+      # Display series: all five patches are required, in this order.
       patch --batch --forward --fuzz=0 -p1 < ${../patches/a14-display-dsc.patch}
       patch --batch --forward --fuzz=0 -p1 < ${../patches/a14-display-lifecycle.patch}
       patch --batch --forward --fuzz=0 -p1 < ${../patches/a14-display-transparent-lttpr.patch}
       patch --batch --forward --fuzz=0 -p1 < ${../patches/a14-display-edp-depth.patch}
+      patch --batch --forward --fuzz=0 -p1 < ${../patches/a14-display-direct-dsc.patch}
 
       echo "All ASUS A14 kernel patches applied successfully"
 ''

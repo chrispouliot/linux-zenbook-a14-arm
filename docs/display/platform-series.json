@@ -151,6 +151,14 @@
       "source_files": [
         "drivers/gpu/drm/msm/dp/dp_display.c"
       ]
+    },
+    {
+      "path": "patches/platform/19-usba-power-retention.patch",
+      "sha256": "1210f38284a3efcf2a0b6d6cd6d698c8dcde26be5eea59c2b2210d8f467ad077",
+      "source_files": [
+        "drivers/clk/qcom/gcc-glymur.c"
+      ],
+      "experimental": true
     }
   ]
 }

@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
-"""Reconstruct the default local A14 patch recipe and check its source hashes.
+"""Reconstruct the A14 platform/display patch subset and check its source hashes.
 
 Requires Python 3.12+, git, patch, bash, and a local Git checkout containing the
 pinned kernel commit. Never changes the input checkout or builds/installs a kernel.
 Executes this repository's postPatch shell/Python code in a new output directory;
 use only with a trusted repository. Does not evaluate Nix or inherited Nixpkgs
-patches. The optional SCMI patch is outside this default-source comparison.
+patches. SCMI, camera and video additions are outside this source comparison.
 """
 import argparse
 import hashlib
@@ -35,7 +35,7 @@ def main():
     git = ['git', '-C', str(source)]
     subprocess.run(git + ['cat-file', '-e', rev + '^{commit}'], check=True)
     kernel_nix = (repo / 'kernel.nix').read_text()
-    required = 'postPatch = (old.postPatch or "") + (import ./kernel/a14-post-patch.nix);'
+    required = 'postPatch = (old.postPatch or "") + (import ./kernel/a14-post-patch.nix)'
     if kernel_nix.count(required) != 1:
         parser.error('Unexpected kernel recipe integration')
     initial = re.findall(r'\./patches/([^\s;]+\.patch)', kernel_nix)
@@ -46,7 +46,7 @@ def main():
     if expression.count("''\n") != 2 or not expression.endswith("\n''\n"):
         parser.error('Unexpected postPatch expression delimiters')
     body = expression.split("''\n", 1)[1].rsplit("\n''\n", 1)[0]
-    marker = '      # Display series: all four patches are required, in this order.\n'
+    marker = '      # Display series: all five patches are required, in this order.\n'
     if body.count(marker) != 1:
         parser.error('Display series boundary missing or duplicated')
     platform = json.loads((repo / 'docs/display/platform-series.json').read_text())
@@ -108,6 +108,7 @@ def main():
         raise SystemExit('Source comparison failed: ' + ', '.join(mismatches + extras))
     print(f'PASS: all {len(expected)} reconstructed source files match the tested baseline.')
     print('PASS: platform and display patches applied in order without fuzz or offsets.')
+    print('SCMI, camera/video additions and inherited Nixpkgs patches were not applied.')
     print('No NixOS evaluation, kernel compilation, or hardware test performed.')
     print('Reconstruction and hashes:', out)
 

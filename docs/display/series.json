@@ -85,6 +85,16 @@
         "drivers/gpu/drm/msm/dp/dp_display.c"
       ],
       "sha256": "eda7c7b8fd466c3ecb8cd333627dcc8cfb573196d2ba5a026a801e3436cab586"
+    },
+    {
+      "order": 5,
+      "path": "patches/a14-display-direct-dsc.patch",
+      "original_patches": [],
+      "source_files": [
+        "drivers/gpu/drm/msm/dp/dp_ctrl.c",
+        "drivers/gpu/drm/msm/dp/dp_panel.c"
+      ],
+      "sha256": "77abe94d2c1eb0f85613bc1f76cb5bb17ab8ad34a705abd7ad383f0aea6525a6"
     }
   ]
 }

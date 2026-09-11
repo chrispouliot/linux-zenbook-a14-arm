@@ -1,0 +1,56 @@
+From: A14 display investigation
+Subject: [PATCH 5/5] drm/msm/dp: allow guarded A14 direct 4K144 DSC
+
+The four-lane HBR3 direct path falls back to RGB6 for the tested
+1333330 kHz mode because the existing DSC gate admits only two lanes.
+Allow this exact mode on four lanes and admit four-lane trained links
+within the existing DSC/FEC budget. Retain the two-lane dock behavior
+and the uncompressed four-lane 4K60 path. Existing board, controller,
+module parameter, timing and sink capability guards still apply.
+
+This is an A14-specific extension, not generic DSC mode support.
+
+diff --git a/drivers/gpu/drm/msm/dp/dp_panel.c b/drivers/gpu/drm/msm/dp/dp_panel.c
+--- a/drivers/gpu/drm/msm/dp/dp_panel.c
++++ b/drivers/gpu/drm/msm/dp/dp_panel.c
+@@ -279,7 +279,7 @@
+ 	 * EDID DisplayID timing: 144.050 Hz, RGB8 -> DSC8, four 960px
+ 	 * slices (333.333 MP/s per slice). The baseline capability guard
+ 	 * already requires at least 340 MP/s and >=1920px slice width.
+-	 * The existing bandwidth checks require HBR3 x2 for this timing.
++	 * The link guards allow HBR3 with two or four lanes for this timing.
+ 	 */
+ 	return a14_dp_dsc_144_test &&
+ 		(dp_panel->dsc_dpcd[DP_DSC_SLICE_CAP_1 - DP_DSC_SUPPORT] &
+@@ -297,9 +297,16 @@
+ 	u32 link_bitrate = link->num_lanes * link->rate * 8;
+ 
+ 	*comp_type = MSM_DISPLAY_COMPRESSION_NONE;
+-	/* 8 bpp DSC; reserve 3% for FEC plus slice/EOC padding. */
++	/*
++	 * 8 bpp DSC; reserve 3% for FEC plus slice/EOC padding.
++	 * Keep four-lane 4K60 uncompressed. The exact 4K144 timing
++	 * below needs DSC for RGB8 even on a four-lane HBR3 link.
++	 */
+ 	if (msm_dp_panel_a14_dsc_target(dp_panel) && dp_panel->dsc_en &&
+-	    mode_edid_bpp >= 24 && link->num_lanes == 2 && link->rate >= 540000 &&
++	    mode_edid_bpp >= 24 && link->rate >= 540000 &&
++	    (link->num_lanes == 2 ||
++	     (link->num_lanes == 4 && link->rate == 810000 &&
++	      mode->clock == 1333330)) &&
+ 	    msm_dp_panel_a14_dsc_mode(dp_panel, mode) &&
+ 	    (u64)mode->clock * 8 * 103 <= (u64)link_bitrate * 100) {
+ 		*comp_type = MSM_DISPLAY_COMPRESSION_DSC;
+diff --git a/drivers/gpu/drm/msm/dp/dp_ctrl.c b/drivers/gpu/drm/msm/dp/dp_ctrl.c
+--- a/drivers/gpu/drm/msm/dp/dp_ctrl.c
++++ b/drivers/gpu/drm/msm/dp/dp_ctrl.c
+@@ -3662,7 +3662,8 @@
+ 
+ 	/* Recheck the trained link: fallback can invalidate the modeset budget. */
+ 	if (DP_DSC_PANEL_EN(ctrl->panel) &&
+-	    (ctrl->link->link_params.num_lanes != 2 ||
++	    ((ctrl->link->link_params.num_lanes != 2 &&
++	      ctrl->link->link_params.num_lanes != 4) ||
+ 	     ctrl->link->link_params.rate < 540000 ||
+ 	     (u64)pixel_rate_orig * 8 * 103 >
+ 	     (u64)ctrl->link->link_params.rate * ctrl->link->link_params.num_lanes * 8 * 100)) {

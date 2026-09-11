@@ -1,5 +1,8 @@
 # A14 display stack
 
+The [direct 4K144 DSC extension](DIRECT-DSC.md) changes two kernel source files
+after the packaging baseline described below. It requires a new build and hardware validation.
+
 This is the tested A14-specific display stack for kernel commit
 `51231839d5ef007638bd1c3500e6a76b337a66f3`. Its latest packaging changes preserve
 all 38 reconstructed kernel source files byte-for-byte. They do not establish
@@ -18,8 +21,9 @@ followed by this display series:
 | 2 | `patches/a14-display-lifecycle.patch` | Wake, AUX, HPD, and link teardown corrections, diagnostics, and gated alternatives. |
 | 3 | `patches/a14-display-transparent-lttpr.patch` | The guarded transparent-repeater path that made the tested dock reliable. |
 | 4 | `patches/a14-display-edp-depth.patch` | Native internal colour-depth finalization after powered capability setup. |
+| 5 | `patches/a14-display-direct-dsc.patch` | Guarded four-lane direct 4K144 RGB8 DSC extension; hardware validation pending. |
 
-**Apply all four in order.** They are review boundaries, not independent optional
+**Apply all five in order.** They are review boundaries, not independent optional
 features. Earlier stages contain intermediate states corrected by later patches.
 The previous `a14-display-stack.patch` is replaced by their combined result.
 `series.json` records the order, hashes, affected files, and historical inputs.
