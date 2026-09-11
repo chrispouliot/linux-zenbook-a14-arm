@@ -26,6 +26,12 @@ in {
     (lib.mkRenamedOptionModule
       [ "hardware" "asus" "zenbookA14" "experimental" "camera" "enable" ]
       [ "hardware" "asus" "zenbookA14" "camera" "enable" ])
+    (lib.mkRenamedOptionModule
+      [ "hardware" "asus" "zenbookA14" "experimental" "video" "enable" ]
+      [ "hardware" "asus" "zenbookA14" "video" "enable" ])
+    (lib.mkRenamedOptionModule
+      [ "hardware" "asus" "zenbookA14" "experimental" "video" "firmwareName" ]
+      [ "hardware" "asus" "zenbookA14" "video" "firmwareName" ])
     (import ./audio.nix inputs hardwarePkgs)
     (import ./video.nix inputs hardwarePkgs)
     ./ramoops.nix
@@ -48,20 +54,20 @@ in {
       default = 1.0;
       description = "Speaker gain multiplier. 1.0 is unity; the source configuration used 1.50.";
     };
+    video.enable = lib.mkOption {
+      type = lib.types.bool;
+      default = true;
+      description = "Enable the Iris hardware video decoder and encoder: the ported upstream Glymur Iris series and the UX3407NA video codec board description. Sessions need the qcvss8480.mbn video firmware in firmwareSource. Changing it rebuilds the kernel; see docs/hardware.md.";
+    };
+    video.firmwareName = lib.mkOption {
+      type = lib.types.str;
+      default = "qcom/glymur/ASUSTeK/UX3407NA/qcvss8480.mbn";
+      description = "Firmware path compiled into the video codec node. The default is the OEM-signed image from the Windows driver store; \"qcom/vpu/vpu36_p4_s7.mbn\" selects the generic linux-firmware image, which is installed as well.";
+    };
     camera.enable = lib.mkOption {
       type = lib.types.bool;
       default = true;
       description = "Enable the front camera: backported Glymur CAMSS, CSI2 PHY, CCI and PM8010 drivers, the UX3407NA camera board description, libcamera and the udmabuf access rule. Changing it rebuilds the kernel; see docs/hardware.md.";
-    };
-    experimental.video.enable = lib.mkOption {
-      type = lib.types.bool;
-      default = false;
-      description = "Build the experimental Iris hardware video decode/encode support: the ported upstream Glymur Iris series and the UX3407NA video codec board description. Needs the optional qcvss8480.mbn video firmware in firmwareSource. Rebuilds the kernel; see docs/hardware.md.";
-    };
-    experimental.video.firmwareName = lib.mkOption {
-      type = lib.types.str;
-      default = "qcom/glymur/ASUSTeK/UX3407NA/qcvss8480.mbn";
-      description = "Firmware path compiled into the video codec node. The default is the OEM-signed image from the Windows driver store; \"qcom/vpu/vpu36_p4_s7.mbn\" selects the generic linux-firmware image, which is installed as well.";
     };
     experimental.scmiMailbox = lib.mkOption {
       type = lib.types.bool;
@@ -101,13 +107,17 @@ in {
         message = "A14 firmware directory is incomplete. Missing: ${lib.concatMapStringsSep ", " (file: file.name) missing}. Run a14-firmware validate DIRECTORY; see docs/firmware.md.";
       }
     ];
+    warnings = lib.optional
+      (cfg.video.enable && cfg.firmwareSource != null
+        && !(builtins.pathExists (cfg.firmwareSource + "/qcvss8480.mbn")))
+      "hardware.asus.zenbookA14: the video codec is enabled but ${toString cfg.firmwareSource} has no qcvss8480.mbn; the Iris decoder nodes will appear but every session will fail to load firmware. Collect the file from the Windows driver store (see docs/firmware.md) or set hardware.asus.zenbookA14.video.enable = false.";
     nixpkgs.hostPlatform = lib.mkDefault "aarch64-linux";
     boot.kernelPackages = hardwarePkgs.callPackage ../kernel.nix {
       glymurSrc = inputs.glymur-kernel;
       scmiMailbox = cfg.experimental.scmiMailbox;
       camera = cfg.camera.enable;
-      video = cfg.experimental.video.enable;
-      videoFirmwareName = cfg.experimental.video.firmwareName;
+      video = cfg.video.enable;
+      videoFirmwareName = cfg.video.firmwareName;
       strictDevmem = !cfg.diagnostics.unrestrictedDevmem;
     };
 

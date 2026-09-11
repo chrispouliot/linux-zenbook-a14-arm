@@ -33,8 +33,8 @@ helper are fully opt-in.
 | `audio.speakerGain` | `1.0` | Gain multiplier; source owner used `1.50` |
 | `experimental.scmiMailbox` | `false` | Adds the original diagnostic SCMI mailbox-write patch; rebuilds kernel |
 | `camera.enable` | `true` | Camera drivers, board description, libcamera and the udmabuf rule; turning it off rebuilds the kernel |
-| `experimental.video.enable` | `false` | Ported Glymur Iris video codec driver and the A14 video node; needs the optional `qcvss8480.mbn`; rebuilds kernel |
-| `experimental.video.firmwareName` | OEM path | Firmware path compiled into the video node; `qcom/vpu/vpu36_p4_s7.mbn` selects the generic linux-firmware image |
+| `video.enable` | `true` | Ported Glymur Iris video codec driver and the A14 video node; sessions need the optional `qcvss8480.mbn`; turning it off rebuilds the kernel |
+| `video.firmwareName` | OEM path | Firmware path compiled into the video node; `qcom/vpu/vpu36_p4_s7.mbn` selects the generic linux-firmware image |
 | `diagnostics.unrestrictedDevmem` | `false` | Builds without STRICT_DEVMEM so acpidump can read the firmware ACPI tables; rebuilds kernel |
 | `diagnostics.verbose` | `false` | Adds `drm.debug=0x100`; defaults console verbosity to 7 |
 | `diagnostics.ramoops32GiB.enable` | `false` | Original reserved memory and pstore helper, only for the verified memory layout |
@@ -169,10 +169,13 @@ The sensor's own power sequence is not in the DSDT; it lives in the Qualcomm
 camera driver's `com.qti.sensormodule.*.bin` and `CAMF_RES_*.bin` files,
 which ASUS ships in its downloadable Qualcomm board support package.
 
-## Video decode (experimental)
+## Video decode
 
-`experimental.video.enable` adds the Iris video codec, the hardware H.264,
-HEVC, VP9 and AV1 decoder and encoder. It is untested on the UX3407NA so far.
+The Iris video codec, the hardware H.264, HEVC, VP9 and AV1 decoder and
+encoder, is enabled by default; `video.enable = false` removes it. The older
+`experimental.video.*` option names are still accepted. Verified on the
+UX3407NA on 2026-09-11: the OEM firmware authenticates and ffmpeg's
+`h264_v4l2m2m` decodes 1080p H.264 at about 480 fps with the CPU idle.
 
 - **Driver backports** (`patches/video/`): the upstream series "media: iris:
   Add support for glymur platform" (v10, July 2026), thirteen commits ported
@@ -186,11 +189,12 @@ HEVC, VP9 and AV1 decoder and encoder. It is untested on the UX3407NA so far.
 - **Board description** (`patches/a14-iris.dtsi`): enables the node the way
   the CRD does, with firmware authenticated through PAS and mapped through the
   `video-firmware` context bank. The firmware path is compiled in from
-  `experimental.video.firmwareName`.
+  `video.firmwareName`.
 - **Firmware**: the retail laptop is expected to need the OEM-signed
   `qcvss8480.mbn` from the Windows driver store, like the DSP images. It is an
   optional manifest entry: the collector copies it when found and the module
-  installs it when present. The generic Qualcomm-signed
+  installs it when present, and warns at evaluation time when it is missing.
+  The generic Qualcomm-signed
   `qcom/vpu/vpu36_p4_s7.mbn` from linux-firmware is installed as well;
   point `firmwareName` at it to test whether the device accepts it.
 - **Userspace**: Iris is a stateful V4L2 memory-to-memory codec. GStreamer's

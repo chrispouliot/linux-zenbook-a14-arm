@@ -1,19 +1,21 @@
 
 /*
- * EXPERIMENTAL: ASUS Zenbook A14 UX3407NA (Glymur) Iris video codec, the
- * hardware video decoder and encoder.
+ * ASUS Zenbook A14 UX3407NA (Glymur) Iris video codec, the hardware video
+ * decoder and encoder.
  *
- * Appended to the board dts by kernel/a14-video-post-patch.nix when
- * hardware.asus.zenbookA14.experimental.video.enable is set. The SoC node
- * comes from the backported upstream series "media: iris: Add support for
- * glymur platform" (v10, 2026-07-26) under patches/video/.
+ * Appended to the board dts by kernel/a14-video-post-patch.nix unless
+ * hardware.asus.zenbookA14.video.enable is turned off. The SoC node comes
+ * from the backported upstream series "media: iris: Add support for glymur
+ * platform" (v10, 2026-07-26) under patches/video/. Verified on the UX3407NA
+ * on 2026-09-11: firmware authenticated, 1080p H.264 decoded through
+ * ffmpeg's h264_v4l2m2m at about 480 fps.
  *
  * This mirrors the Glymur CRD enablement from that series: firmware is
  * authenticated through PAS and mapped through the "video-firmware" context
  * bank, as the CRD does. The firmware image itself is the OEM-signed
  * qcvss8480.mbn from the Windows driver store, installed like the DSP
  * images; @VIDEO_FIRMWARE@ is substituted at kernel build time from
- * hardware.asus.zenbookA14.experimental.video.firmwareName.
+ * hardware.asus.zenbookA14.video.firmwareName.
  */
 
 &iris {

@@ -1,10 +1,10 @@
 # Iris video codec board description. A function of the firmware path so the
 # board fragment can point at the OEM image or the generic linux-firmware
-# image. Only used when kernel.nix is called with video = true. The driver
+# image. Used when kernel.nix is called with video = true (the default). The driver
 # and SoC device-tree backports are applied earlier as regular patches (see
 # videoPatches in kernel.nix).
 videoFirmwareName: ''
-      echo "Appending ASUS A14 experimental video codec board description"
+      echo "Appending ASUS A14 video codec board description"
       cat ${../patches/a14-iris.dtsi} \
         >> arch/arm64/boot/dts/qcom/glymur-asus-zenbook-a14-ux3407na.dts
       sed -i 's|@VIDEO_FIRMWARE@|${videoFirmwareName}|' \

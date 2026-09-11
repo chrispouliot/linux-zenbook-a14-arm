@@ -5,7 +5,7 @@
   glymurSrc,
   scmiMailbox ? false,
   camera ? true,
-  video ? false,
+  video ? true,
   videoFirmwareName ? "qcom/glymur/ASUSTeK/UX3407NA/qcvss8480.mbn",
   strictDevmem ? true,
   ...
@@ -34,7 +34,7 @@ let
     "15-glymur-dts-cam-mclk-pinctrl.patch"
   ];
 
-  # Experimental Iris video codec support (video = true): the upstream series
+  # Iris video codec support (video = true, the default): the upstream series
   # "media: iris: Add support for glymur platform" (v10, 2026-07-26), ported
   # onto the pinned snapshot. The binding document from that series is
   # already in the tree. See docs/hardware.md.

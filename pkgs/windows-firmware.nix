@@ -24,7 +24,7 @@ let
 
 
     # ------------------------------------------------------------
-    # Iris video codec (optional, experimental.video.enable)
+    # Iris video codec (optional file, used by video.enable)
     # ------------------------------------------------------------
 
     ${optional "qcvss8480.mbn" "qcom/glymur/ASUSTeK/UX3407NA/qcvss8480.mbn"}
