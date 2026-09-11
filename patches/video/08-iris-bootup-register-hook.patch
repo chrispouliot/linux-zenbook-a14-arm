@@ -1,0 +1,84 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Vishnu Reddy <busanna.reddy@oss.qualcomm.com>
+Date: Sun, 26 Jul 2026 11:19:39 +0530
+Subject: [PATCH] media: iris: Handle CPU_CS_SCIACMDARG3 register write via
+ program bootup registers hook
+
+On the Glymur platform, the firmware reads CPU_CS_SCIACMDARG3 during boot
+to determine the VM count and increments it by 1. Writing the default 0x1
+causes the firmware to treat the VM count as 2. To avoid that write 0x0 to
+CPU_CS_SCIACMDARG3 as a Glymur platform specific.
+
+Reviewed-by: Dmitry Baryshkov <dmitry.baryshkov@oss.qualcomm.com>
+Signed-off-by: Vishnu Reddy <busanna.reddy@oss.qualcomm.com>
+---
+ drivers/media/platform/qcom/iris/iris_vpu3x.c               | 6 ++++++
+ drivers/media/platform/qcom/iris/iris_vpu_common.c          | 4 ++--
+ .../media/platform/qcom/iris/iris_vpu_register_defines.h    | 1 +
+ 3 files changed, 9 insertions(+), 2 deletions(-)
+
+diff --git a/drivers/media/platform/qcom/iris/iris_vpu3x.c b/drivers/media/platform/qcom/iris/iris_vpu3x.c
+index 1b08461ee..5212f7d4e 100644
+--- a/drivers/media/platform/qcom/iris/iris_vpu3x.c
++++ b/drivers/media/platform/qcom/iris/iris_vpu3x.c
+@@ -328,6 +328,11 @@ static int iris_vpu36_set_hwmode(struct iris_core *core)
+ 	return ret;
+ }
+ 
++static void iris_vpu36_program_bootup_registers(struct iris_core *core)
++{
++	writel(0x0, core->reg_base + CPU_CS_SCIACMDARG3);
++}
++
+ const struct vpu_ops iris_vpu3_ops = {
+ 	.power_off_hw = iris_vpu3_power_off_hardware,
+ 	.power_on_hw = iris_vpu_power_on_hw,
+@@ -361,6 +366,7 @@ const struct vpu_ops iris_vpu36_ops = {
+ 	.power_on_hw = iris_vpu36_power_on_hw,
+ 	.power_off_controller = iris_vpu35_vpu4x_power_off_controller,
+ 	.power_on_controller = iris_vpu35_vpu4x_power_on_controller,
++	.program_bootup_registers = iris_vpu36_program_bootup_registers,
+ 	.calc_freq = iris_vpu3x_vpu4x_calculate_frequency,
+ 	.set_hwmode = iris_vpu36_set_hwmode,
+ };
+diff --git a/drivers/media/platform/qcom/iris/iris_vpu_common.c b/drivers/media/platform/qcom/iris/iris_vpu_common.c
+index 06e15ea6b..e35788762 100644
+--- a/drivers/media/platform/qcom/iris/iris_vpu_common.c
++++ b/drivers/media/platform/qcom/iris/iris_vpu_common.c
+@@ -26,7 +26,6 @@
+ #define QTBL_ENABLE				BIT(0)
+ 
+ #define QTBL_ADDR				(CPU_CS_BASE_OFFS + 0x54)
+-#define CPU_CS_SCIACMDARG3			(CPU_CS_BASE_OFFS + 0x58)
+ #define SFR_ADDR				(CPU_CS_BASE_OFFS + 0x5C)
+ #define UC_REGION_ADDR				(CPU_CS_BASE_OFFS + 0x64)
+ #define UC_REGION_SIZE				(CPU_CS_BASE_OFFS + 0x68)
+@@ -67,6 +66,8 @@ static void iris_vpu_setup_ucregion_memory_map(struct iris_core *core)
+ 		writel(value, core->reg_base + SFR_ADDR);
+ 	}
+ 
++	writel(0x1, core->reg_base + CPU_CS_SCIACMDARG3);
++
+ 	if (vpu_ops->program_bootup_registers)
+ 		vpu_ops->program_bootup_registers(core);
+ }
+@@ -78,7 +79,6 @@ int iris_vpu_boot_firmware(struct iris_core *core)
+ 	iris_vpu_setup_ucregion_memory_map(core);
+ 
+ 	writel(ctrl_init, core->reg_base + CTRL_INIT);
+-	writel(0x1, core->reg_base + CPU_CS_SCIACMDARG3);
+ 
+ 	while (!ctrl_status && count < max_tries) {
+ 		ctrl_status = readl(core->reg_base + CTRL_STATUS);
+diff --git a/drivers/media/platform/qcom/iris/iris_vpu_register_defines.h b/drivers/media/platform/qcom/iris/iris_vpu_register_defines.h
+index c44c85eac..3782454b7 100644
+--- a/drivers/media/platform/qcom/iris/iris_vpu_register_defines.h
++++ b/drivers/media/platform/qcom/iris/iris_vpu_register_defines.h
+@@ -29,6 +29,7 @@
+ #define CPU_CS_A2HSOFTINTCLR			(CPU_CS_BASE_OFFS + 0x1C)
+ #define CLEAR_XTENSA2HOST_INTR			BIT(0)
+ 
++#define CPU_CS_SCIACMDARG3			(CPU_CS_BASE_OFFS + 0x58)
+ #define CPU_CS_H2XSOFTINTEN			(CPU_CS_BASE_OFFS + 0x148)
+ #define HOST2XTENSA_INTR_ENABLE			BIT(0)
+ 

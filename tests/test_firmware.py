@@ -68,6 +68,22 @@ class FirmwareTests(unittest.TestCase):
             fw.write_selection({"test.elf": source}, output, self.manifest)
         self.assertEqual((output / "test.elf").read_bytes(), b"keep this")
 
+    def test_optional_file_may_be_absent_and_is_used_when_present(self):
+        optional = {"name": "extra.mbn", "referenceSha256": None, "optional": True}
+        self.make_file("test.elf", self.reference)
+        hashes, warnings = fw.validate(self.root, self.manifest + [optional], strict=True)
+        self.assertEqual(set(hashes), {"test.elf"})
+        self.assertTrue(any("Optional file absent" in w for w in warnings))
+        result = fw.discover([self.root], self.manifest + [optional])
+        self.assertNotIn("extra.mbn", result)
+        extra = self.make_file("drivers/extra.mbn", b"unknown version, no reference hash")
+        result = fw.discover([self.root], self.manifest + [optional])
+        self.assertEqual(result["extra.mbn"], extra)
+        self.make_file("extra.mbn", b"unknown version, no reference hash")
+        hashes, warnings = fw.validate(self.root, self.manifest + [optional], strict=True)
+        self.assertIn("extra.mbn", hashes)
+        self.assertEqual(warnings, [])
+
     def test_invalid_set_does_not_create_destination(self):
         source = self.make_file("source/test.elf", b"not reference")
         output = self.root / "output"

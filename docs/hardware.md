@@ -33,6 +33,8 @@ helper are fully opt-in.
 | `audio.speakerGain` | `1.0` | Gain multiplier; source owner used `1.50` |
 | `experimental.scmiMailbox` | `false` | Adds the original diagnostic SCMI mailbox-write patch; rebuilds kernel |
 | `camera.enable` | `true` | Camera drivers, board description, libcamera and the udmabuf rule; turning it off rebuilds the kernel |
+| `experimental.video.enable` | `false` | Ported Glymur Iris video codec driver and the A14 video node; needs the optional `qcvss8480.mbn`; rebuilds kernel |
+| `experimental.video.firmwareName` | OEM path | Firmware path compiled into the video node; `qcom/vpu/vpu36_p4_s7.mbn` selects the generic linux-firmware image |
 | `diagnostics.unrestrictedDevmem` | `false` | Builds without STRICT_DEVMEM so acpidump can read the firmware ACPI tables; rebuilds kernel |
 | `diagnostics.verbose` | `false` | Adds `drm.debug=0x100`; defaults console verbosity to 7 |
 | `diagnostics.ramoops32GiB.enable` | `false` | Original reserved memory and pstore helper, only for the verified memory layout |
@@ -166,3 +168,44 @@ Map the ACPI I2C controller to a device-tree bus by its register address.
 The sensor's own power sequence is not in the DSDT; it lives in the Qualcomm
 camera driver's `com.qti.sensormodule.*.bin` and `CAMF_RES_*.bin` files,
 which ASUS ships in its downloadable Qualcomm board support package.
+
+## Video decode (experimental)
+
+`experimental.video.enable` adds the Iris video codec, the hardware H.264,
+HEVC, VP9 and AV1 decoder and encoder. It is untested on the UX3407NA so far.
+
+- **Driver backports** (`patches/video/`): the upstream series "media: iris:
+  Add support for glymur platform" (v10, July 2026), thirteen commits ported
+  onto the pinned snapshot. Its binding document was already in the tree. The
+  port resolves three things the snapshot gained after the series was
+  written: the firmware auto-detection rewrite in `iris_firmware.c`, the
+  four-argument `qcom_mdt_pas_load()` that maps the reserved region itself,
+  and Milos support, whose platform tables are converted to the series' new
+  per-block structures. The Glymur node in `glymur.dtsi` and the CRD
+  enablement come from the same series.
+- **Board description** (`patches/a14-iris.dtsi`): enables the node the way
+  the CRD does, with firmware authenticated through PAS and mapped through the
+  `video-firmware` context bank. The firmware path is compiled in from
+  `experimental.video.firmwareName`.
+- **Firmware**: the retail laptop is expected to need the OEM-signed
+  `qcvss8480.mbn` from the Windows driver store, like the DSP images. It is an
+  optional manifest entry: the collector copies it when found and the module
+  installs it when present. The generic Qualcomm-signed
+  `qcom/vpu/vpu36_p4_s7.mbn` from linux-firmware is installed as well;
+  point `firmwareName` at it to test whether the device accepts it.
+- **Userspace**: Iris is a stateful V4L2 memory-to-memory codec. GStreamer's
+  `v4l2h264dec` and `v4l2h265dec` (gst-plugins-good) pick it up automatically,
+  so GStreamer players such as Showtime, Totem and Clapper use it; ffmpeg has
+  the `h264_v4l2m2m` and `hevc_v4l2m2m` decoders. Firefox and Chromium do not
+  use V4L2 stateful decoders on Linux desktops.
+
+### First test on the device
+
+1. `dmesg | grep -i -E 'iris|videocc|video-codec'`: expect the firmware to
+   load and two video devices to register; "auth and reset failed" means the
+   firmware image was rejected.
+2. `v4l2-ctl --list-devices` should list an `iris_driver` decoder and encoder.
+3. `gst-inspect-1.0 v4l2h264dec`, then a decode:
+   `ffmpeg -c:v h264_v4l2m2m -i some.mp4 -f null -` or
+   `gst-launch-1.0 filesrc location=some.mp4 ! qtdemux ! h264parse ! v4l2h264dec ! fakesink`.
+

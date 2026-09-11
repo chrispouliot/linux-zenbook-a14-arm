@@ -1,0 +1,82 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Vikash Garodia <vikash.garodia@oss.qualcomm.com>
+Date: Sun, 26 Jul 2026 11:19:41 +0530
+Subject: [PATCH] media: iris: Add hooks for pixel and non-pixel context banks
+
+Iris platforms use separate context-bank devices for the pixel, non-pixel
+firmware domains. Add platform hooks to create and destroy those
+subdevices, providing a interface for their lifecycle management across
+platforms.
+
+Co-developed-by: Vishnu Reddy <busanna.reddy@oss.qualcomm.com>
+Signed-off-by: Vishnu Reddy <busanna.reddy@oss.qualcomm.com>
+Signed-off-by: Vikash Garodia <vikash.garodia@oss.qualcomm.com>
+Tested-by: Daniel J Blueman <daniel@quora.org>
+---
+ drivers/media/platform/qcom/iris/iris_vpu3x.c | 48 +++++++++++++++++++
+ 1 file changed, 48 insertions(+)
+
+diff --git a/drivers/media/platform/qcom/iris/iris_vpu3x.c b/drivers/media/platform/qcom/iris/iris_vpu3x.c
+index ec35ad4f8..bc95be22e 100644
+--- a/drivers/media/platform/qcom/iris/iris_vpu3x.c
++++ b/drivers/media/platform/qcom/iris/iris_vpu3x.c
+@@ -397,6 +397,52 @@ static u64 iris_vpu36_get_required_freq(struct iris_inst *inst)
+ 	return max(vcodec0_freq, vcodec1_freq);
+ }
+ 
++static int iris_vpu3x_init_cb_devs(struct iris_core *core)
++{
++	struct device *dev;
++
++	dev = iris_create_cb_dev(core, "non-pixel");
++	if (IS_ERR(dev))
++		return PTR_ERR(dev);
++
++	core->np_dev = dev;
++
++	dev = iris_create_cb_dev(core, "pixel");
++	if (IS_ERR(dev))
++		goto unreg_np_dev;
++
++	core->p_dev = dev;
++
++	dev = iris_create_cb_dev(core, "video-firmware");
++	if (IS_ERR(dev))
++		goto unreg_p_dev;
++
++	core->fw_dev = dev;
++
++	return 0;
++
++unreg_p_dev:
++	if (core->p_dev)
++		platform_device_unregister(to_platform_device(core->p_dev));
++	core->p_dev = NULL;
++unreg_np_dev:
++	if (core->np_dev)
++		platform_device_unregister(to_platform_device(core->np_dev));
++	core->np_dev = NULL;
++
++	return PTR_ERR(dev);
++}
++
++static void iris_vpu3x_deinit_cb_devs(struct iris_core *core)
++{
++	if (core->fw_dev)
++		platform_device_unregister(to_platform_device(core->fw_dev));
++	if (core->p_dev)
++		platform_device_unregister(to_platform_device(core->p_dev));
++	if (core->np_dev)
++		platform_device_unregister(to_platform_device(core->np_dev));
++}
++
+ const struct vpu_ops iris_vpu3_ops = {
+ 	.power_off_hw = iris_vpu3_power_off_hardware,
+ 	.power_on_hw = iris_vpu_power_on_hw,
+@@ -435,4 +481,6 @@ const struct vpu_ops iris_vpu36_ops = {
+ 	.set_hwmode = iris_vpu36_set_hwmode,
+ 	.check_core_load = iris_vpu36_check_core_load,
+ 	.get_required_freq = iris_vpu36_get_required_freq,
++	.init_cb_devs = iris_vpu3x_init_cb_devs,
++	.deinit_cb_devs = iris_vpu3x_deinit_cb_devs,
+ };

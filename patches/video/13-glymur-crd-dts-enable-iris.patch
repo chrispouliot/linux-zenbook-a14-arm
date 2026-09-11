@@ -1,0 +1,37 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Vishnu Reddy <busanna.reddy@oss.qualcomm.com>
+Date: Sun, 26 Jul 2026 11:19:44 +0530
+Subject: [PATCH] arm64: dts: qcom: glymur-crd: Enable iris video codec node
+
+The iris hardware block is described in the glymur SoC DTSI, and enabling
+it here allows the media iris driver to probe and use the video codec
+functionality.
+
+Reviewed-by: Vikash Garodia <vikash.garodia@oss.qualcomm.com>
+Reviewed-by: Dmitry Baryshkov <dmitry.baryshkov@oss.qualcomm.com>
+Signed-off-by: Vishnu Reddy <busanna.reddy@oss.qualcomm.com>
+---
+ arch/arm64/boot/dts/qcom/glymur-crd.dtsi | 10 ++++++++++
+ 1 file changed, 10 insertions(+)
+
+diff --git a/arch/arm64/boot/dts/qcom/glymur-crd.dtsi b/arch/arm64/boot/dts/qcom/glymur-crd.dtsi
+index b85f5112e..b1fcde2dc 100644
+--- a/arch/arm64/boot/dts/qcom/glymur-crd.dtsi
++++ b/arch/arm64/boot/dts/qcom/glymur-crd.dtsi
+@@ -694,6 +694,16 @@ touchscreen@38 {
+ 	};
+ };
+ 
++&iris {
++	firmware-name = "qcom/vpu/vpu36_p4_s7.mbn";
++
++	status = "okay";
++
++	video-firmware {
++		iommus = <&apps_smmu 0x19e2 0x0>;
++	};
++};
++
+ &lpass_vamacro {
+ 	pinctrl-0 = <&dmic01_default>, <&dmic23_default>;
+ 	pinctrl-names = "default";

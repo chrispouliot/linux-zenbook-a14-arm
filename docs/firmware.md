@@ -13,6 +13,7 @@ checks 13 files. `hmtbtfw20.ver` is not required by the Linux packaging.
 | Board DSP device trees | `adsp_dtbs.elf`, `cdsp_dtbs.elf` |
 | Wi-Fi board data | `bdwlan_qcc2072_1p0_ncm820A.elf` |
 | Bluetooth patch and NVM | `hmtbtfw20.tlv`, `hmtnv20.bin`, `hmtnv20.b3b`, `hmtnv20.b105`, `hmtnv20.b107`, `hmtnv20.b108`, `hmtnv20.b10f`, `hmtnv20.b112` |
+| Video codec image (optional) | `qcvss8480.mbn`, only for `experimental.video.enable`; collected when present, skipped with a warning otherwise |
 
 The generic QCC2072 `firmware-2.bin` is fetched separately from the pinned
 linux-firmware source. You do not need to find that file in Windows.

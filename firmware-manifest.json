@@ -65,6 +65,13 @@
       "name": "hmtnv20.b112",
       "destination": "qca/hmtnv20.b112",
       "referenceSha256": "6cc9e4609bde5cba32460ecd691ed39bcf2de14d6ae59e501c9c9fc637c54b4b"
+    },
+    {
+      "name": "qcvss8480.mbn",
+      "destination": "qcom/glymur/ASUSTeK/UX3407NA/qcvss8480.mbn",
+      "referenceSha256": "cb696e6dd56a7e5ec2d1b09295c26ac5b6c239f63c6114a66a5839d89d3b1fd1",
+      "optional": true,
+      "purpose": "Iris video codec firmware; only needed for hardware.asus.zenbookA14.experimental.video.enable"
     }
   ]
 }

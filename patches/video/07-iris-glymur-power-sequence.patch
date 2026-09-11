@@ -1,0 +1,255 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Vishnu Reddy <busanna.reddy@oss.qualcomm.com>
+Date: Sun, 26 Jul 2026 11:19:38 +0530
+Subject: [PATCH] media: iris: Add power sequence for glymur
+
+Glymur platform has two video codec cores: vcodec0 and vcodec1.
+Both cores share a common clock source (video_cc_mvs0_clk_src) and the
+same power rails. The clock dividers between the source and the branch
+clocks are fixed. So when both cores are running, the source clock always
+runs at the highest frequency requested by either core.
+Since both cores share the same power rails, the power corner cannot be
+voted independently. Scaling one core's power corner up or down would
+directly affect the other, leading to under or over-voting.
+For these reasons, both cores should voted the clock and power rail must
+be based on the workload of both cores.
+
+Reviewed-by: Vikash Garodia <vikash.garodia@oss.qualcomm.com>
+Signed-off-by: Vishnu Reddy <busanna.reddy@oss.qualcomm.com>
+---
+ drivers/media/platform/qcom/iris/iris_vpu3x.c | 126 +++++++++++++++++-
+ .../platform/qcom/iris/iris_vpu_common.h      |   1 +
+ .../qcom/iris/iris_vpu_register_defines.h     |  12 ++
+ 3 files changed, 134 insertions(+), 5 deletions(-)
+
+diff --git a/drivers/media/platform/qcom/iris/iris_vpu3x.c b/drivers/media/platform/qcom/iris/iris_vpu3x.c
+index 7cda94601..1b08461ee 100644
+--- a/drivers/media/platform/qcom/iris/iris_vpu3x.c
++++ b/drivers/media/platform/qcom/iris/iris_vpu3x.c
+@@ -17,14 +17,14 @@
+ #define NOC_HALT				BIT(0)
+ #define AON_WRAPPER_SPARE			(AON_BASE_OFFS + 0x28)
+ 
+-static bool iris_vpu3x_hw_power_collapsed(struct iris_core *core)
++static bool iris_vpu3x_hw_power_collapsed(struct iris_core *core, u32 pwr_status_bit)
+ {
+ 	u32 value, pwr_status;
+ 
+ 	value = readl(core->reg_base + WRAPPER_CORE_POWER_STATUS);
+-	pwr_status = value & BIT(1);
++	pwr_status = value & pwr_status_bit;
+ 
+-	return pwr_status ? false : true;
++	return !pwr_status;
+ }
+ 
+ static void iris_vpu3_power_off_hardware(struct iris_core *core)
+@@ -32,7 +32,7 @@ static void iris_vpu3_power_off_hardware(struct iris_core *core)
+ 	u32 reg_val = 0, value, i;
+ 	int ret;
+ 
+-	if (iris_vpu3x_hw_power_collapsed(core))
++	if (iris_vpu3x_hw_power_collapsed(core, VCODEC0_POWER_STATUS))
+ 		goto disable_power;
+ 
+ 	dev_err(core->dev, "video hw is power on\n");
+@@ -78,7 +78,7 @@ static void iris_vpu33_power_off_hardware(struct iris_core *core)
+ 	u32 count = 0;
+ 	int ret;
+ 
+-	if (iris_vpu3x_hw_power_collapsed(core))
++	if (iris_vpu3x_hw_power_collapsed(core, VCODEC0_POWER_STATUS))
+ 		goto disable_power;
+ 
+ 	dev_err(core->dev, "video hw is power on\n");
+@@ -221,6 +221,113 @@ static void iris_vpu35_power_off_hw(struct iris_core *core)
+ 	iris_vpu33_power_off_hardware(core);
+ }
+ 
++static void iris_vpu36_power_off_vcodec(struct iris_core *core, u32 core_id)
++{
++	u32 bridge_hw_reset[] = {CORE_BRIDGE_HW_RESET_DISABLE, VCODEC1_BRIDGE_HW_RESET_DISABLE};
++	u32 lpi_status_active[] = {NOC_LPI_STATUS_ACTIVE, NOC_LPI_VCODEC1_STATUS_ACTIVE};
++	u32 power_down_prep[] = {REQ_POWER_DOWN_PREP, REQ_VCODEC1_POWER_DOWN_PREP};
++	u32 lpi_status_done[] = {NOC_LPI_STATUS_DONE, NOC_LPI_VCODEC1_STATUS_DONE};
++	u32 lpi_status_deny[] = {NOC_LPI_STATUS_DENY, NOC_LPI_VCODEC1_STATUS_DENY};
++	u32 bridge_sw_reset[] = {CORE_BRIDGE_SW_RESET, VCODEC1_BRIDGE_SW_RESET};
++	u32 idle_status[] = {VCODEC_SS_IDLE_STATUSN, VCODEC1_SS_IDLE_STATUSN};
++	u32 power_status[] = {VCODEC0_POWER_STATUS, VCODEC1_POWER_STATUS};
++	bool handshake_done, handshake_busy;
++	u32 value, i, count = 0;
++	int ret;
++
++	if (iris_vpu3x_hw_power_collapsed(core, power_status[core_id]))
++		goto disable_power;
++
++	value = readl(core->reg_base + WRAPPER_CORE_CLOCK_CONFIG);
++	if (value)
++		writel(CORE_CLK_RUN, core->reg_base + WRAPPER_CORE_CLOCK_CONFIG);
++
++	for (i = 0; i < core->iris_platform_data->num_vpp_pipe; i++) {
++		ret = readl_poll_timeout(core->reg_base + idle_status[core_id] + 4 * i,
++					 value, value & DMA_NOC_IDLE, 2000, 20000);
++		if (ret)
++			goto disable_power;
++	}
++
++	do {
++		writel(power_down_prep[core_id], core->reg_base + AON_WRAPPER_MVP_NOC_LPI_CONTROL);
++		usleep_range(15, 20);
++		value = readl(core->reg_base + AON_WRAPPER_MVP_NOC_LPI_STATUS);
++
++		handshake_done = value & lpi_status_done[core_id];
++		handshake_busy = value & (lpi_status_deny[core_id] | lpi_status_active[core_id]);
++
++		if (handshake_done || !handshake_busy)
++			break;
++
++		writel(0, core->reg_base + AON_WRAPPER_MVP_NOC_LPI_CONTROL);
++		usleep_range(15, 20);
++	} while (++count < 1000);
++
++	if (!handshake_done && handshake_busy)
++		goto disable_power;
++
++	writel(0, core->reg_base + AON_WRAPPER_MVP_NOC_LPI_CONTROL);
++
++	writel(bridge_sw_reset[core_id] | bridge_hw_reset[core_id],
++	       core->reg_base + CPU_CS_AHB_BRIDGE_SYNC_RESET);
++	writel(bridge_hw_reset[core_id], core->reg_base + CPU_CS_AHB_BRIDGE_SYNC_RESET);
++	writel(0x0, core->reg_base + CPU_CS_AHB_BRIDGE_SYNC_RESET);
++
++disable_power:
++	iris_genpd_set_hwmode(&core->vcodec[core_id], false);
++	iris_disable_power_domain_and_clocks(core, &core->vcodec[core_id]);
++}
++
++static void iris_vpu36_power_off_hw(struct iris_core *core)
++{
++	u32 num_cores = core->iris_platform_data->num_cores;
++	int i;
++
++	for (i = 0; i < num_cores; i++)
++		iris_vpu36_power_off_vcodec(core, i);
++}
++
++static int iris_vpu36_power_on_hw(struct iris_core *core)
++{
++	u32 num_cores = core->iris_platform_data->num_cores;
++	int i, ret;
++
++	for (i = 0; i < num_cores; i++) {
++		ret = iris_enable_power_domain_and_clocks(core, &core->vcodec[i]);
++		if (ret)
++			goto error;
++	}
++
++	return 0;
++
++error:
++	while (--i >= 0)
++		iris_vpu36_power_off_vcodec(core, i);
++
++	return ret;
++}
++
++static int iris_vpu36_set_hwmode(struct iris_core *core)
++{
++	u32 num_cores = core->iris_platform_data->num_cores;
++	int i, ret;
++
++	for (i = 0; i < num_cores; i++) {
++		ret = iris_genpd_set_hwmode(&core->vcodec[i], true);
++		if (ret)
++			goto error;
++	}
++
++	return 0;
++
++error:
++	while (--i >= 0)
++		iris_genpd_set_hwmode(&core->vcodec[i], false);
++
++	return ret;
++}
++
+ const struct vpu_ops iris_vpu3_ops = {
+ 	.power_off_hw = iris_vpu3_power_off_hardware,
+ 	.power_on_hw = iris_vpu_power_on_hw,
+@@ -248,3 +355,12 @@ const struct vpu_ops iris_vpu35_ops = {
+ 	.calc_freq = iris_vpu3x_vpu4x_calculate_frequency,
+ 	.set_hwmode = iris_vpu_set_hwmode,
+ };
++
++const struct vpu_ops iris_vpu36_ops = {
++	.power_off_hw = iris_vpu36_power_off_hw,
++	.power_on_hw = iris_vpu36_power_on_hw,
++	.power_off_controller = iris_vpu35_vpu4x_power_off_controller,
++	.power_on_controller = iris_vpu35_vpu4x_power_on_controller,
++	.calc_freq = iris_vpu3x_vpu4x_calculate_frequency,
++	.set_hwmode = iris_vpu36_set_hwmode,
++};
+diff --git a/drivers/media/platform/qcom/iris/iris_vpu_common.h b/drivers/media/platform/qcom/iris/iris_vpu_common.h
+index a8df9af0d..34ecb18ae 100644
+--- a/drivers/media/platform/qcom/iris/iris_vpu_common.h
++++ b/drivers/media/platform/qcom/iris/iris_vpu_common.h
+@@ -12,6 +12,7 @@ extern const struct vpu_ops iris_vpu2_ops;
+ extern const struct vpu_ops iris_vpu3_ops;
+ extern const struct vpu_ops iris_vpu33_ops;
+ extern const struct vpu_ops iris_vpu35_ops;
++extern const struct vpu_ops iris_vpu36_ops;
+ extern const struct vpu_ops iris_vpu4x_ops;
+ 
+ struct vpu_ops {
+diff --git a/drivers/media/platform/qcom/iris/iris_vpu_register_defines.h b/drivers/media/platform/qcom/iris/iris_vpu_register_defines.h
+index 72168b9ff..c44c85eac 100644
+--- a/drivers/media/platform/qcom/iris/iris_vpu_register_defines.h
++++ b/drivers/media/platform/qcom/iris/iris_vpu_register_defines.h
+@@ -7,6 +7,7 @@
+ #define __IRIS_VPU_REGISTER_DEFINES_H__
+ 
+ #define VCODEC_BASE_OFFS			0x00000000
++#define VCODEC1_BASE_OFFS			0x00040000
+ #define AON_MVP_NOC_RESET			0x0001F000
+ #define CPU_BASE_OFFS				0x000A0000
+ #define WRAPPER_BASE_OFFS			0x000B0000
+@@ -14,6 +15,8 @@
+ #define AON_BASE_OFFS				0x000E0000
+ 
+ #define VCODEC_SS_IDLE_STATUSN			(VCODEC_BASE_OFFS + 0x70)
++#define VCODEC1_SS_IDLE_STATUSN			(VCODEC1_BASE_OFFS + 0x70)
++#define DMA_NOC_IDLE				BIT(22)
+ 
+ #define AON_WRAPPER_MVP_NOC_RESET_REQ		(AON_MVP_NOC_RESET + 0x000)
+ #define VIDEO_NOC_RESET_REQ			(BIT(0) | BIT(1))
+@@ -35,6 +38,8 @@
+ #define CPU_CS_AHB_BRIDGE_SYNC_RESET		(CPU_CS_BASE_OFFS + 0x160)
+ #define CORE_BRIDGE_SW_RESET			BIT(0)
+ #define CORE_BRIDGE_HW_RESET_DISABLE		BIT(1)
++#define VCODEC1_BRIDGE_SW_RESET			BIT(2)
++#define VCODEC1_BRIDGE_HW_RESET_DISABLE		BIT(3)
+ 
+ #define CPU_CS_X2RPMH				(CPU_CS_BASE_OFFS + 0x168)
+ #define MSK_SIGNAL_FROM_TENSILICA		BIT(0)
+@@ -52,14 +57,21 @@
+ #define WRAPPER_DEBUG_BRIDGE_LPI_STATUS		(WRAPPER_BASE_OFFS + 0x58)
+ #define WRAPPER_IRIS_CPU_NOC_LPI_CONTROL	(WRAPPER_BASE_OFFS + 0x5C)
+ #define REQ_POWER_DOWN_PREP			BIT(0)
++#define REQ_VCODEC1_POWER_DOWN_PREP		BIT(1)
+ 
+ #define WRAPPER_IRIS_CPU_NOC_LPI_STATUS		(WRAPPER_BASE_OFFS + 0x60)
+ #define NOC_LPI_STATUS_DONE			BIT(0) /* Indicates the NOC handshake is complete */
+ #define NOC_LPI_STATUS_DENY			BIT(1) /* Indicates the NOC handshake is denied */
+ #define NOC_LPI_STATUS_ACTIVE			BIT(2) /* Indicates the NOC is active */
++#define NOC_LPI_VCODEC1_STATUS_DONE		BIT(8)
++#define NOC_LPI_VCODEC1_STATUS_DENY		BIT(9)
++#define NOC_LPI_VCODEC1_STATUS_ACTIVE		BIT(10)
+ 
+ #define WRAPPER_IRIS_VCODEC_VPU_WRAPPER_SPARE_0	(WRAPPER_BASE_OFFS + 0x78)
+ #define WRAPPER_CORE_POWER_STATUS		(WRAPPER_BASE_OFFS + 0x80)
++#define VCODEC0_POWER_STATUS			BIT(1)
++#define VCODEC1_POWER_STATUS			BIT(4)
++
+ #define WRAPPER_CORE_CLOCK_CONFIG		(WRAPPER_BASE_OFFS + 0x88)
+ #define CORE_CLK_RUN				0x0
+ 

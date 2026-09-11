@@ -5,6 +5,8 @@
   glymurSrc,
   scmiMailbox ? false,
   camera ? true,
+  video ? false,
+  videoFirmwareName ? "qcom/glymur/ASUSTeK/UX3407NA/qcvss8480.mbn",
   strictDevmem ? true,
   ...
 }:
@@ -30,6 +32,26 @@ let
     "13-glymur-dts-camss-csiphy.patch"
     "14-glymur-dts-cci.patch"
     "15-glymur-dts-cam-mclk-pinctrl.patch"
+  ];
+
+  # Experimental Iris video codec support (video = true): the upstream series
+  # "media: iris: Add support for glymur platform" (v10, 2026-07-26), ported
+  # onto the pinned snapshot. The binding document from that series is
+  # already in the tree. See docs/hardware.md.
+  videoPatches = map (name: ./patches/video + "/${name}") [
+    "01-iris-context-bank-hooks.patch"
+    "02-iris-create-context-bank-device.patch"
+    "03-iris-select-context-bank-device.patch"
+    "04-iris-skip-dma-mask-without-iommu.patch"
+    "05-iris-secure-pas-linux-iommu.patch"
+    "06-iris-per-block-clock-power-tables.patch"
+    "07-iris-glymur-power-sequence.patch"
+    "08-iris-bootup-register-hook.patch"
+    "09-iris-dual-core-select.patch"
+    "10-iris-pixel-nonpixel-hooks.patch"
+    "11-iris-glymur-platform-data.patch"
+    "12-glymur-dts-iris-node.patch"
+    "13-glymur-crd-dts-enable-iris.patch"
   ];
 
   baseKernel = buildLinux {
@@ -83,6 +105,13 @@ let
       REGULATOR_QCOM_PM8008 = module;
       VIDEO_CAMERA_SENSOR = yes;
       VIDEO_OV02C10 = module;
+    } // lib.optionalAttrs video {
+      # Iris video codec, its clock controller and the generic PAS firmware
+      # authentication interface it loads firmware through.
+      VIDEO_QCOM_IRIS = module;
+      CLK_GLYMUR_VIDEOCC = module;
+      QCOM_PAS = yes;
+      QCOM_MDT_LOADER = module;
     };
   };
 
@@ -92,10 +121,12 @@ let
       ./patches/a14-glymur-ucsi-dp-mux-race.patch
       ./patches/a14-dp-hpd-replay.patch
     ] ++ lib.optional scmiMailbox ./patches/a14-scmi-mailbox-set-test.patch
-      ++ lib.optionals camera cameraPatches;
+      ++ lib.optionals camera cameraPatches
+      ++ lib.optionals video videoPatches;
 
     postPatch = (old.postPatch or "") + (import ./kernel/a14-post-patch.nix)
-      + lib.optionalString camera (import ./kernel/a14-camera-post-patch.nix);
+      + lib.optionalString camera (import ./kernel/a14-camera-post-patch.nix)
+      + lib.optionalString video ((import ./kernel/a14-video-post-patch.nix) videoFirmwareName);
   });
 
 in

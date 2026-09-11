@@ -33,16 +33,19 @@ foreach ($item in $manifest.files) {
         $hash = (Get-FileHash -LiteralPath $path -Algorithm SHA256).Hash.ToLowerInvariant()
         $versions[$hash] = $path
     }
-    if ($versions.ContainsKey($item.referenceSha256)) { $hash = $item.referenceSha256 }
+    $reference = $item.referenceSha256
+    $optional = [bool]$item.optional
+    if ($null -ne $reference -and $versions.ContainsKey($reference)) { $hash = $reference }
     elseif ($versions.Count -eq 1) { $hash = @($versions.Keys)[0] }
-    elseif ($versions.Count -eq 0 -and $knownBytes.ContainsKey($item.referenceSha256)) {
+    elseif ($versions.Count -eq 0 -and $null -ne $reference -and $knownBytes.ContainsKey($reference)) {
         # Only reproduce an absent alias when the bytes match its reference.
-        $hash = $item.referenceSha256
+        $hash = $reference
         $versions[$hash] = $knownBytes[$hash]
     }
+    elseif ($versions.Count -eq 0 -and $optional) { Write-Warning "Optional file not found, skipping: $($item.name)"; continue }
     elseif ($versions.Count -eq 0) { $failures += "Missing: $($item.name)"; continue }
     else { $failures += "Multiple versions of $($item.name); narrow -Source to the chosen driver directory."; continue }
-    if ($hash -ne $item.referenceSha256) {
+    if ($null -ne $reference -and $hash -ne $reference) {
         if ($Strict) { $failures += "Hash differs from reference: $($item.name)"; continue }
         Write-Warning "Hash differs from the tested reference: $($item.name). This version needs hardware testing."
     }

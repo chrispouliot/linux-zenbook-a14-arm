@@ -1,0 +1,221 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Mukesh Ojha <mukesh.ojha@oss.qualcomm.com>
+Date: Sun, 26 Jul 2026 11:19:36 +0530
+Subject: [PATCH] media: iris: Enable Secure PAS support with IOMMU managed by
+ Linux
+
+On platforms where a hypervisor is present, all Secure Monitor Calls
+(SMC) are intercepted. For qcom_scm_pas_auth_and_reset(), the hypervisor
+registers a Shared Memory (SHM) bridge over the Peripheral Image Loader
+(PIL) memory region so that TrustZone (TZ) can access it, forwards the
+authentication SMC to TZ, and upon return maps the PIL region and
+triggers the co-processor bring-up sequence:
+HLOS -> Hypervisor(SHM setup) -> TZ(auth) -> Hypervisor(map+reset) -> IRIS
+
+On platforms without a hypervisor, Linux drives these steps directly.
+The SHM bridge infrastructure required for this is already upstream [1].
+To isolate firmware memory in its own Input-Output Memory Management
+Unit (IOMMU) context, a dedicated stream ID (SID) is required, tied to
+the firmware function ID. This SID is specified via the iommu-map
+property in the device tree using the firmware function ID as the lookup
+key. A firmware device is created and mapped to this SID.
+The presence of a SID mapped to the firmware device via iommu-map is
+used to detect whether a hypervisor is absent: when the firmware device
+has a SID mapped, Linux manages the IOMMU directly; when no SID is
+mapped, a hypervisor is assumed to be present and these steps are
+skipped.
+Extend the Iris driver to support Secure Peripheral Authentication
+Service (PAS) on platforms where Linux manages the IOMMU, by creating
+the firmware context device and performing the necessary IOMMU mapping
+when the firmware device SID is present.
+[1] https://lore.kernel.org/lkml/20260105-kvmrprocv10-v10-0-022e96815380
+@oss.qualcomm.com/
+
+Reviewed-by: Vishnu Reddy <busanna.reddy@oss.qualcomm.com>
+Co-developed-by: Vikash Garodia <vikash.garodia@oss.qualcomm.com>
+Signed-off-by: Vikash Garodia <vikash.garodia@oss.qualcomm.com>
+Signed-off-by: Mukesh Ojha <mukesh.ojha@oss.qualcomm.com>
+Reviewed-by: Dmitry Baryshkov <dmitry.baryshkov@oss.qualcomm.com>
+Link: https://lore.kernel.org/lkml/20260105-kvmrprocv10-v10-0-022e96815380@oss.qualcomm.com/
+Signed-off-by: Vishnu Reddy <busanna.reddy@oss.qualcomm.com>
+---
+ drivers/media/platform/qcom/iris/iris_core.h  |  4 ++
+ .../media/platform/qcom/iris/iris_firmware.c  | 72 ++++++++++++++-----
+ 2 files changed, 60 insertions(+), 16 deletions(-)
+
+diff --git a/drivers/media/platform/qcom/iris/iris_core.h b/drivers/media/platform/qcom/iris/iris_core.h
+index 3c96f46cf..5ed2ec0b9 100644
+--- a/drivers/media/platform/qcom/iris/iris_core.h
++++ b/drivers/media/platform/qcom/iris/iris_core.h
+@@ -38,6 +38,8 @@ struct qcom_ubwc_cfg_data;
+  * @dev: reference to device structure
+  * @np_dev: reference to non-pixel device structure
+  * @p_dev: reference to pixel device structure
++ * @fw_dev: reference to firmware device structure
++ * @pas_ctx: PAS context for authenticated firmware load and shutdown
+  * @reg_base: IO memory base address
+  * @irq: iris irq
+  * @v4l2_dev: a holder for v4l2 device structure
+@@ -85,6 +87,8 @@ struct iris_core {
+ 	struct device				*dev;
+ 	struct device				*np_dev;
+ 	struct device				*p_dev;
++	struct device				*fw_dev;
++	struct qcom_pas_context			*pas_ctx;
+ 	void __iomem				*reg_base;
+ 	int					irq;
+ 	struct v4l2_device			v4l2_dev;
+diff --git a/drivers/media/platform/qcom/iris/iris_firmware.c b/drivers/media/platform/qcom/iris/iris_firmware.c
+index 965384fdd..2ab5d97ce 100644
+--- a/drivers/media/platform/qcom/iris/iris_firmware.c
++++ b/drivers/media/platform/qcom/iris/iris_firmware.c
+@@ -4,7 +4,9 @@
+  */
+ 
+ #include <linux/firmware.h>
++#include <linux/firmware/qcom/qcom_pas.h>
+ #include <linux/firmware/qcom/qcom_scm.h>
++#include <linux/iommu.h>
+ #include <linux/of_address.h>
+ #include <linux/of_reserved_mem.h>
+ #include <linux/soc/qcom/mdt_loader.h>
+@@ -15,6 +17,7 @@
+ #define IRIS_PAS_ID				9
+ 
+ #define MAX_FIRMWARE_NAME_SIZE	128
++#define IRIS_FW_START_ADDR	0
+ 
+ /* Detect Gen2 firmware by scanning the blob for:
+  *   QC_IMAGE_VERSION_STRING=<version>
+@@ -109,23 +112,31 @@ static const struct firmware *iris_detect_firmware(struct iris_core *core,
+ 
+ static int iris_load_fw_to_memory(struct iris_core *core)
+ {
++	struct device *fw_dev = core->fw_dev ? core->fw_dev : core->dev;
+ 	const struct firmware *firmware = NULL;
+-	struct device *dev = core->dev;
++	struct qcom_pas_context	*ctx;
++	struct iommu_domain *domain;
+ 	struct resource res;
+ 	phys_addr_t mem_phys;
+ 	const char *fw_name;
+ 	size_t res_size;
+ 	ssize_t fw_size;
+-	void *mem_virt;
+ 	int ret;
+ 
+-	ret = of_reserved_mem_region_to_resource(dev->of_node, 0, &res);
++	ret = of_reserved_mem_region_to_resource(core->dev->of_node, 0, &res);
+ 	if (ret)
+ 		return ret;
+ 
+ 	mem_phys = res.start;
+ 	res_size = resource_size(&res);
+ 
++	if (!core->pas_ctx) {
++		ctx = devm_qcom_pas_context_alloc(core->dev, IRIS_PAS_ID, mem_phys, res_size);
++		if (IS_ERR(ctx))
++			return PTR_ERR(ctx);
++		core->pas_ctx = ctx;
++	}
++
+ 	firmware = iris_detect_firmware(core, &fw_name);
+ 	if (IS_ERR(firmware))
+ 		return PTR_ERR(firmware);
+@@ -138,22 +149,40 @@ static int iris_load_fw_to_memory(struct iris_core *core)
+ 		goto err_release_fw;
+ 	}
+ 
+-	mem_virt = memremap(mem_phys, res_size, MEMREMAP_WC);
+-	if (!mem_virt) {
+-		ret = -ENOMEM;
++	core->pas_ctx->use_tzmem = !!core->fw_dev;
++	ret = qcom_mdt_pas_load(core->pas_ctx, firmware, fw_name, NULL);
++	if (ret)
+ 		goto err_release_fw;
+-	}
+ 
+-	ret = qcom_mdt_load(dev, firmware, fw_name,
+-			    IRIS_PAS_ID, mem_virt, mem_phys, res_size, NULL);
++	if (core->pas_ctx->use_tzmem) {
++		domain = iommu_get_domain_for_dev(fw_dev);
++		if (!domain) {
++			ret = -ENODEV;
++			goto err_release_fw;
++		}
++
++		ret = iommu_map(domain, IRIS_FW_START_ADDR, mem_phys, res_size,
++				IOMMU_READ | IOMMU_WRITE | IOMMU_PRIV, GFP_KERNEL);
++	}
+ 
+-	memunmap(mem_virt);
+ err_release_fw:
+ 	release_firmware(firmware);
+ 
+ 	return ret;
+ }
+ 
++static void iris_fw_iommu_unmap(struct iris_core *core)
++{
++	struct iommu_domain *domain;
++
++	if (!core->fw_dev)
++		return;
++
++	domain = iommu_get_domain_for_dev(core->fw_dev);
++	if (domain)
++		iommu_unmap(domain, IRIS_FW_START_ADDR, core->pas_ctx->mem_size);
++}
++
+ int iris_fw_load(struct iris_core *core)
+ {
+ 	const struct tz_cp_config *cp_config;
+@@ -165,10 +194,10 @@ int iris_fw_load(struct iris_core *core)
+ 		return ret;
+ 	}
+ 
+-	ret = qcom_scm_pas_auth_and_reset(IRIS_PAS_ID);
++	ret = qcom_pas_prepare_and_auth_reset(core->pas_ctx);
+ 	if (ret)  {
+ 		dev_err(core->dev, "auth and reset failed: %d\n", ret);
+-		return ret;
++		goto err_unmap;
+ 	}
+ 
+ 	for (i = 0; i < core->iris_platform_data->tz_cp_config_data_size; i++) {
+@@ -179,20 +208,31 @@ int iris_fw_load(struct iris_core *core)
+ 						     cp_config->cp_nonpixel_size);
+ 		if (ret) {
+ 			dev_err(core->dev, "qcom_scm_mem_protect_video_var failed: %d\n", ret);
+-			qcom_scm_pas_shutdown(IRIS_PAS_ID);
+-			return ret;
++			goto err_pas_shutdown;
+ 		}
+ 	}
+ 
+ 	return 0;
++
++err_pas_shutdown:
++	qcom_pas_shutdown(IRIS_PAS_ID);
++err_unmap:
++	iris_fw_iommu_unmap(core);
++
++	return ret;
+ }
+ 
+ int iris_fw_unload(struct iris_core *core)
+ {
+-	return qcom_scm_pas_shutdown(IRIS_PAS_ID);
++	int ret;
++
++	ret = qcom_pas_shutdown(IRIS_PAS_ID);
++	iris_fw_iommu_unmap(core);
++
++	return ret;
+ }
+ 
+ int iris_set_hw_state(struct iris_core *core, bool resume)
+ {
+-	return qcom_scm_set_remote_state(resume, 0);
++	return qcom_pas_set_remote_state(resume, 0);
+ }

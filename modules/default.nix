@@ -4,8 +4,9 @@ let
   cfg = config.hardware.asus.zenbookA14;
   hardwarePkgs = import ../lib/hardware-pkgs.nix inputs.nixpkgs pkgs.stdenv.buildPlatform.system;
   manifest = builtins.fromJSON (builtins.readFile ../firmware-manifest.json);
+  required = builtins.filter (file: !(file.optional or false)) manifest.files;
   missing = if cfg.firmwareSource == null then [ ] else
-    builtins.filter (file: !(builtins.pathExists (cfg.firmwareSource + "/${file.name}"))) manifest.files;
+    builtins.filter (file: !(builtins.pathExists (cfg.firmwareSource + "/${file.name}"))) required;
   windowsFirmware = hardwarePkgs.callPackage ../pkgs/windows-firmware.nix {
     firmwareSource = cfg.firmwareSource;
   };
@@ -26,6 +27,7 @@ in {
       [ "hardware" "asus" "zenbookA14" "experimental" "camera" "enable" ]
       [ "hardware" "asus" "zenbookA14" "camera" "enable" ])
     (import ./audio.nix inputs hardwarePkgs)
+    (import ./video.nix inputs hardwarePkgs)
     ./ramoops.nix
     ./camera.nix
   ];
@@ -50,6 +52,16 @@ in {
       type = lib.types.bool;
       default = true;
       description = "Enable the front camera: backported Glymur CAMSS, CSI2 PHY, CCI and PM8010 drivers, the UX3407NA camera board description, libcamera and the udmabuf access rule. Changing it rebuilds the kernel; see docs/hardware.md.";
+    };
+    experimental.video.enable = lib.mkOption {
+      type = lib.types.bool;
+      default = false;
+      description = "Build the experimental Iris hardware video decode/encode support: the ported upstream Glymur Iris series and the UX3407NA video codec board description. Needs the optional qcvss8480.mbn video firmware in firmwareSource. Rebuilds the kernel; see docs/hardware.md.";
+    };
+    experimental.video.firmwareName = lib.mkOption {
+      type = lib.types.str;
+      default = "qcom/glymur/ASUSTeK/UX3407NA/qcvss8480.mbn";
+      description = "Firmware path compiled into the video codec node. The default is the OEM-signed image from the Windows driver store; \"qcom/vpu/vpu36_p4_s7.mbn\" selects the generic linux-firmware image, which is installed as well.";
     };
     experimental.scmiMailbox = lib.mkOption {
       type = lib.types.bool;
@@ -94,6 +106,8 @@ in {
       glymurSrc = inputs.glymur-kernel;
       scmiMailbox = cfg.experimental.scmiMailbox;
       camera = cfg.camera.enable;
+      video = cfg.experimental.video.enable;
+      videoFirmwareName = cfg.experimental.video.firmwareName;
       strictDevmem = !cfg.diagnostics.unrestrictedDevmem;
     };
 

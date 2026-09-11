@@ -27,18 +27,25 @@ def load_manifest():
     raise FirmwareError("Cannot locate firmware-manifest.json beside this tool or its parent directory.")
 
 
+def is_optional(item):
+    return bool(item.get("optional"))
+
+
 def validate(source, manifest, strict=False):
     errors, warnings, hashes = [], [], {}
     for item in manifest:
         path = source / item["name"]
         if not path.is_file():
-            errors.append(f"Missing: {item['name']}")
+            if is_optional(item):
+                warnings.append(f"Optional file absent: {item['name']} ({item.get('purpose', 'optional')})")
+            else:
+                errors.append(f"Missing: {item['name']}")
         elif path.stat().st_size == 0:
             errors.append(f"Empty: {item['name']}")
         else:
             value = digest(path)
             hashes[item["name"]] = value
-            if value != item["referenceSha256"]:
+            if item["referenceSha256"] is not None and value != item["referenceSha256"]:
                 message = f"Different from tested reference: {item['name']} ({value})"
                 (errors if strict else warnings).append(message)
     if errors:
@@ -78,6 +85,8 @@ def discover(sources, manifest):
             selected[item["name"]] = next(iter(by_hash.values()))[0]
         elif not paths and item["referenceSha256"] in known_bytes:
             selected[item["name"]] = known_bytes[item["referenceSha256"]]
+        elif not paths and is_optional(item):
+            print(f"Optional file not found, skipping: {item['name']}", file=sys.stderr)
         elif not paths:
             errors.append(f"Not found: {item['name']}")
         else:
@@ -135,7 +144,8 @@ def main():
         manifest = load_manifest()
         if args.command == "list":
             for item in manifest:
-                print(f"{item['name']} -> {item['destination']}")
+                note = " (optional)" if is_optional(item) else ""
+                print(f"{item['name']} -> {item['destination']}{note}")
             return 0
         if args.command == "validate":
             hashes, warnings = validate(args.source, manifest, args.strict)
@@ -144,7 +154,8 @@ def main():
             hashes, warnings = write_selection(selected, args.output, manifest, args.strict)
         else:
             validate(args.source, manifest, args.strict)
-            selected = {item["name"]: args.source / item["name"] for item in manifest}
+            selected = {item["name"]: args.source / item["name"] for item in manifest
+                        if (args.source / item["name"]).is_file()}
             hashes, warnings = write_selection(selected, args.output, manifest, args.strict)
         for warning in warnings:
             print(f"WARNING: {warning}", file=sys.stderr)

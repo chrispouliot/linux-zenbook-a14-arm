@@ -1,5 +1,10 @@
-{ runCommand, firmwareSource }:
+{ lib, runCommand, firmwareSource }:
 let
+  # Optional files: installed only when present in the firmware directory.
+  optional = name: destination:
+    lib.optionalString (builtins.pathExists (firmwareSource + "/${name}")) ''
+      install -Dm644 ${firmwareSource}/${name} $out/lib/firmware/${destination}
+    '';
   firmware = runCommand "asus-a14-glymur-firmware" { } ''
     # ------------------------------------------------------------
     # ADSP / CDSP
@@ -16,6 +21,13 @@ let
 
     install -Dm644 ${firmwareSource}/cdsp_dtbs.elf \
       $out/lib/firmware/qcom/glymur/ASUSTeK/UX3407NA/cdsp_dtbs.elf
+
+
+    # ------------------------------------------------------------
+    # Iris video codec (optional, experimental.video.enable)
+    # ------------------------------------------------------------
+
+    ${optional "qcvss8480.mbn" "qcom/glymur/ASUSTeK/UX3407NA/qcvss8480.mbn"}
 
 
     # ------------------------------------------------------------

@@ -1,0 +1,99 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Vikash Garodia <vikash.garodia@oss.qualcomm.com>
+Date: Sun, 26 Jul 2026 11:19:32 +0530
+Subject: [PATCH] media: iris: Add hooks to initialize and tear down context
+ banks
+
+Add platform hooks to set up and tear down context bank devices.
+Different iris platforms may require different context bank setup, so
+let platform data provide the required operations via vpu_ops.
+
+Co-developed-by: Vishnu Reddy <busanna.reddy@oss.qualcomm.com>
+Signed-off-by: Vishnu Reddy <busanna.reddy@oss.qualcomm.com>
+Signed-off-by: Vikash Garodia <vikash.garodia@oss.qualcomm.com>
+Tested-by: Daniel J Blueman <daniel@quora.org>
+---
+ drivers/media/platform/qcom/iris/iris_probe.c | 25 ++++++++++++++++++-
+ .../platform/qcom/iris/iris_vpu_common.h      |  2 ++
+ 2 files changed, 26 insertions(+), 1 deletion(-)
+
+diff --git a/drivers/media/platform/qcom/iris/iris_probe.c b/drivers/media/platform/qcom/iris/iris_probe.c
+index e4acf4a74..353660ab8 100644
+--- a/drivers/media/platform/qcom/iris/iris_probe.c
++++ b/drivers/media/platform/qcom/iris/iris_probe.c
+@@ -15,6 +15,7 @@
+ #include "iris_core.h"
+ #include "iris_ctrls.h"
+ #include "iris_vidc.h"
++#include "iris_vpu_common.h"
+ 
+ static int iris_init_icc(struct iris_core *core)
+ {
+@@ -150,6 +151,20 @@ static int iris_init_resources(struct iris_core *core)
+ 	return iris_init_resets(core);
+ }
+ 
++static int iris_init_cb_devs(struct iris_core *core)
++{
++	if (core->iris_platform_data->vpu_ops->init_cb_devs)
++		return core->iris_platform_data->vpu_ops->init_cb_devs(core);
++
++	return 0;
++}
++
++static void iris_deinit_cb_devs(struct iris_core *core)
++{
++	if (core->iris_platform_data->vpu_ops->deinit_cb_devs)
++		core->iris_platform_data->vpu_ops->deinit_cb_devs(core);
++}
++
+ static int iris_register_video_device(struct iris_core *core, enum domain_type type)
+ {
+ 	struct video_device *vdev;
+@@ -207,6 +222,8 @@ static void iris_remove(struct platform_device *pdev)
+ 
+ 	v4l2_device_unregister(&core->v4l2_dev);
+ 
++	iris_deinit_cb_devs(core);
++
+ 	mutex_destroy(&core->lock);
+ }
+ 
+@@ -269,10 +286,14 @@ static int iris_probe(struct platform_device *pdev)
+ 	if (ret)
+ 		return ret;
+ 
+-	ret = v4l2_device_register(dev, &core->v4l2_dev);
++	ret = iris_init_cb_devs(core);
+ 	if (ret)
+ 		return ret;
+ 
++	ret = v4l2_device_register(dev, &core->v4l2_dev);
++	if (ret)
++		goto err_cb_deinit;
++
+ 	ret = iris_register_video_device(core, DECODER);
+ 	if (ret)
+ 		goto err_v4l2_unreg;
+@@ -306,6 +327,8 @@ static int iris_probe(struct platform_device *pdev)
+ 	video_unregister_device(core->vdev_dec);
+ err_v4l2_unreg:
+ 	v4l2_device_unregister(&core->v4l2_dev);
++err_cb_deinit:
++	iris_deinit_cb_devs(core);
+ 
+ 	return ret;
+ }
+diff --git a/drivers/media/platform/qcom/iris/iris_vpu_common.h b/drivers/media/platform/qcom/iris/iris_vpu_common.h
+index 09799a375..a8df9af0d 100644
+--- a/drivers/media/platform/qcom/iris/iris_vpu_common.h
++++ b/drivers/media/platform/qcom/iris/iris_vpu_common.h
+@@ -22,6 +22,8 @@ struct vpu_ops {
+ 	void (*program_bootup_registers)(struct iris_core *core);
+ 	u64 (*calc_freq)(struct iris_inst *inst, size_t data_size);
+ 	int (*set_hwmode)(struct iris_core *core);
++	int (*init_cb_devs)(struct iris_core *core);
++	void (*deinit_cb_devs)(struct iris_core *core);
+ };
+ 
+ int iris_vpu_boot_firmware(struct iris_core *core);
