@@ -79,6 +79,11 @@ the user's configuration.
 
 ## Updates
 
+The first selective board-v2 backport adds PHY/TCSR supply corrections,
+USB2 redriver descriptions and EC reset protection. See
+[the backport notes](BOARD-V2-BACKPORT.md) for its scope, validation and boot
+test procedure. Existing display/USB workarounds remain enabled.
+
 Update the `a14` input deliberately; its lock pins the shared module and hardware
 dependencies. Avoid making this flake's nixpkgs follow a changing personal
 nixpkgs input until tested. A new kernel source requires checking every patch
@@ -212,4 +217,3 @@ UX3407NA on 2026-09-11: the OEM firmware authenticates and ffmpeg's
 3. `gst-inspect-1.0 v4l2h264dec`, then a decode:
    `ffmpeg -c:v h264_v4l2m2m -i some.mp4 -f null -` or
    `gst-launch-1.0 filesrc location=some.mp4 ! qtdemux ! h264parse ! v4l2h264dec ! fakesink`.
-

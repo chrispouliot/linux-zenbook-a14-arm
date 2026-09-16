@@ -18,6 +18,7 @@ let
   earlyModules = [
     "tcsrcc-glymur" "phy_qcom_qmp_pcie"
     "phy_qcom_m31_eusb2" "phy_qcom_eusb2_repeater"
+    "phy_nxp_ptn3222"
     "phy_qcom_qmp_usb" "phy_qcom_qmp_usbc"
     "gpi" "i2c_qcom_geni" "i2c_hid_of"
   ];

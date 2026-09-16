@@ -1,0 +1,105 @@
+Subject: [PATCH] arm64: dts: qcom: glymur-a14: describe USB2 repeaters and their supplies
+
+Add the two PTN3222 redrivers on i2c5 and connect them to the multiport
+USB2 PHYs. Add the missing USB-C repeater supplies. The existing camera
+fragment can still select 100 kHz on this shared bus when enabled.
+
+Selected changes from Bjorn Andersson's September 2026 v2
+"arm64: dts: qcom: glymur: Add Asus Zenbook A14 (UX3407NA)"
+(posted base 68142f986ff04b2b70b31db00f719bf690f64a9a).
+Adapted to linux-msm/laptops-kernel 51231839d5ef007638bd1c3500e6a76b337a66f3.
+Keep the pinned board's regulator labels and existing local workarounds.
+This backport has not been boot-tested.
+
+--- a/arch/arm64/boot/dts/qcom/glymur-asus-zenbook-a14-ux3407na.dts
++++ b/arch/arm64/boot/dts/qcom/glymur-asus-zenbook-a14-ux3407na.dts
+@@ -23,6 +23,7 @@
+ 
+ 	aliases {
+ 		i2c0 = &i2c0;
++		i2c5 = &i2c5;
+ 		i2c8 = &i2c8;
+ 		i2c10 = &i2c10;
+ 		i2c19 = &i2c19;
+@@ -369,6 +370,13 @@
+ 			regulator-initial-mode = <RPMH_REGULATOR_MODE_HPM>;
+ 		};
+ 
++		vreg_l8b_e0: ldo8 {
++			regulator-name = "vreg_l8b_e0";
++			regulator-min-microvolt = <3304000>;
++			regulator-max-microvolt = <3304000>;
++			regulator-initial-mode = <RPMH_REGULATOR_MODE_HPM>;
++		};
++
+ 		vreg_l15b_e0: ldo15 {
+ 			regulator-name = "vreg_l15b_e0";
+ 			regulator-min-microvolt = <1800000>;
+@@ -526,6 +534,37 @@
+ 		wakeup-source;
+ 	};
+ };
++
++&i2c5 {
++	clock-frequency = <400000>;
++
++	status = "okay";
++
++	ptn3222_1: redriver@43 {
++		compatible = "nxp,ptn3222";
++		reg = <0x43>;
++
++		reset-gpios = <&tlmm 184 GPIO_ACTIVE_LOW>;
++
++		vdd3v3-supply = <&vreg_l8b_e0>;
++		vdd1v8-supply = <&vreg_l15b_e0>;
++
++		#phy-cells = <0>;
++	};
++
++	ptn3222_0: redriver@4f {
++		compatible = "nxp,ptn3222";
++		reg = <0x4f>;
++
++		reset-gpios = <&tlmm 8 GPIO_ACTIVE_LOW>;
++
++		vdd3v3-supply = <&vreg_l8b_e0>;
++		vdd1v8-supply = <&vreg_l15b_e0>;
++
++		#phy-cells = <0>;
++	};
++};
++
+ 
+ &i2c8 {
+ 	clock-frequency = <400000>;
+@@ -757,6 +796,12 @@
+ &remoteproc_soccp {
+ 	status = "okay";
+ };
++
++&smb2370_j_e2_eusb2_repeater {
++	vdd18-supply = <&vreg_l15b_e0>;
++	vdd3-supply = <&vreg_l7b_e0>;
++};
++
+ 
+ &smb2370_k_e2_eusb2_repeater {
+ 	vdd18-supply = <&vreg_l15b_e0>;
+@@ -1085,12 +1130,16 @@
+ 	vdd-supply = <&vreg_l2h_e0>;
+ 	vdda12-supply = <&vreg_l4h_e0>;
+ 
++	phys = <&ptn3222_0>;
++
+ 	status = "okay";
+ };
+ 
+ &usb_mp_hsphy1 {
+ 	vdd-supply = <&vreg_l2h_e0>;
+ 	vdda12-supply = <&vreg_l4h_e0>;
++
++	phys = <&ptn3222_1>;
+ 
+ 	status = "okay";
+ };

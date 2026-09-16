@@ -90,6 +90,9 @@ let
       CPU_FREQ_DEFAULT_GOV_SCHEDUTIL = yes;
 
       EC_ASUS_GLYMUR = module;
+
+      # Board-v2 describes the two USB2 redrivers on i2c5 explicitly.
+      PHY_NXP_PTN3222 = module;
     } // lib.optionalAttrs (!strictDevmem) {
       # Diagnostic only: lets acpidump read the firmware ACPI tables through
       # /dev/mem on this device-tree boot. See docs/hardware.md.
@@ -125,6 +128,7 @@ let
       ++ lib.optionals video videoPatches;
 
     postPatch = (old.postPatch or "") + (import ./kernel/a14-post-patch.nix)
+      + (import ./kernel/a14-board-v2-post-patch.nix)
       + lib.optionalString camera (import ./kernel/a14-camera-post-patch.nix)
       + lib.optionalString video ((import ./kernel/a14-video-post-patch.nix) videoFirmwareName);
   });

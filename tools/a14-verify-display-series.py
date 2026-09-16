@@ -5,7 +5,7 @@ Requires Python 3.12+, git, patch, bash, and a local Git checkout containing the
 pinned kernel commit. Never changes the input checkout or builds/installs a kernel.
 Executes this repository's postPatch shell/Python code in a new output directory;
 use only with a trusted repository. Does not evaluate Nix or inherited Nixpkgs
-patches. SCMI, camera and video additions are outside this source comparison.
+patches. Board-v2, SCMI, camera and video additions are outside this comparison.
 """
 import argparse
 import hashlib
@@ -108,7 +108,7 @@ def main():
         raise SystemExit('Source comparison failed: ' + ', '.join(mismatches + extras))
     print(f'PASS: all {len(expected)} reconstructed source files match the tested baseline.')
     print('PASS: platform and display patches applied in order without fuzz or offsets.')
-    print('SCMI, camera/video additions and inherited Nixpkgs patches were not applied.')
+    print('Board-v2, SCMI, camera/video additions and inherited Nixpkgs patches were not applied.')
     print('No NixOS evaluation, kernel compilation, or hardware test performed.')
     print('Reconstruction and hashes:', out)
 

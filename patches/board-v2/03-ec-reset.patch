@@ -1,0 +1,22 @@
+Subject: [PATCH] arm64: dts: qcom: glymur-a14: reserve the EC reset GPIO
+
+Prevent ordinary GPIO consumers from requesting the EC reset pin.
+Retain all existing secure/TPM reservations and the GPIO 66 EC interrupt.
+
+Selected changes from Bjorn Andersson's September 2026 v2
+"arm64: dts: qcom: glymur: Add Asus Zenbook A14 (UX3407NA)"
+(posted base 68142f986ff04b2b70b31db00f719bf690f64a9a).
+Adapted to linux-msm/laptops-kernel 51231839d5ef007638bd1c3500e6a76b337a66f3.
+Keep the pinned board's regulator labels and existing local workarounds.
+This backport has not been boot-tested.
+
+--- a/arch/arm64/boot/dts/qcom/glymur-asus-zenbook-a14-ux3407na.dts
++++ b/arch/arm64/boot/dts/qcom/glymur-asus-zenbook-a14-ux3407na.dts
+@@ -888,6 +888,7 @@
+ 	gpio-reserved-ranges = <4 4>, /* EC Secure */
+ 			       <10 2>, /* OOB UART */
+ 			       <44 4>, /* TPM */
++			       <65 1>, /* EC reset */
+ 			       <90 2>; /* TPM */
+ 
+ 	tpad_default: tpad-default-state {

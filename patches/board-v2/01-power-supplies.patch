@@ -1,0 +1,135 @@
+Subject: [PATCH] arm64: dts: qcom: glymur-a14: correct PHY and reference-clock supplies
+
+Correct the PHY/PLL supply mappings, HDMI/multiport reference supplies,
+and TCSR reference-generator 3/4 supplies. Keep the shared L15 rail on
+and describe the touchpad supplies. Do not change PCIe PHY bindings.
+
+Selected changes from Bjorn Andersson's September 2026 v2
+"arm64: dts: qcom: glymur: Add Asus Zenbook A14 (UX3407NA)"
+(posted base 68142f986ff04b2b70b31db00f719bf690f64a9a).
+Adapted to linux-msm/laptops-kernel 51231839d5ef007638bd1c3500e6a76b337a66f3.
+Keep the pinned board's regulator labels and existing local workarounds.
+This backport has not been boot-tested.
+
+--- a/arch/arm64/boot/dts/qcom/glymur-asus-zenbook-a14-ux3407na.dts
++++ b/arch/arm64/boot/dts/qcom/glymur-asus-zenbook-a14-ux3407na.dts
+@@ -374,6 +374,8 @@
+ 			regulator-min-microvolt = <1800000>;
+ 			regulator-max-microvolt = <1800000>;
+ 			regulator-initial-mode = <RPMH_REGULATOR_MODE_HPM>;
++			/* Provides reference voltage for many undescribed components */
++			regulator-always-on;
+ 		};
+ 
+ 		vreg_l18b_e0: ldo18 {
+@@ -414,6 +416,13 @@
+ 			regulator-max-microvolt = <936000>;
+ 			regulator-initial-mode = <RPMH_REGULATOR_MODE_HPM>;
+ 		};
++
++		vreg_l4c_e1: ldo4 {
++			regulator-name = "vreg_l4c_e1";
++			regulator-min-microvolt = <912000>;
++			regulator-max-microvolt = <912000>;
++			regulator-initial-mode = <RPMH_REGULATOR_MODE_HPM>;
++		};
+ 	};
+ 
+ 	regulators-2 {
+@@ -507,6 +516,9 @@
+ 
+ 		hid-descr-addr = <0x1>;
+ 		interrupts-extended = <&tlmm 3 IRQ_TYPE_LEVEL_LOW>;
++
++		vdd-supply = <&vreg_misc_3p3>;
++		vddl-supply = <&vreg_l15b_e0>;
+ 
+ 		pinctrl-0 = <&tpad_default>;
+ 		pinctrl-names = "default";
+@@ -808,12 +820,6 @@
+ };
+ 
+ &tcsr {
+-	vdda-refgen-0p9-supply = <&vreg_l1f_e1>;
+-	vdda-refgen-1p2-supply = <&vreg_l4f_e1>;
+-
+-	vdda-qrefrx5-0p9-supply = <&vreg_l3f_e0>;
+-	vdda-qreftx0-0p9-supply = <&vreg_l3f_e0>;
+-	vdda-qreftx0-1p2-supply = <&vreg_l4h_e0>;
+ 	vdda-qrefrpt0-0p9-supply = <&vreg_l2f_e1>;
+ 	vdda-qrefrpt1-0p9-supply = <&vreg_l2f_e1>;
+ 	vdda-qrefrpt2-0p9-supply = <&vreg_l2f_e1>;
+@@ -823,7 +829,14 @@
+ 	vdda-qrefrx1-0p9-supply = <&vreg_l2f_e1>;
+ 	vdda-qrefrx2-0p9-supply = <&vreg_l2f_e1>;
+ 	vdda-qrefrx4-0p9-supply = <&vreg_l2h_e0>;
++	vdda-qrefrx5-0p9-supply = <&vreg_l3f_e0>;
++	vdda-qreftx0-0p9-supply = <&vreg_l3f_e0>;
++	vdda-qreftx0-1p2-supply = <&vreg_l4h_e0>;
+ 	vdda-qreftx1-0p9-supply = <&vreg_l1f_e1>;
++	vdda-refgen3-0p9-supply = <&vreg_l2f_e0>;
++	vdda-refgen3-1p2-supply = <&vreg_l4h_e0>;
++	vdda-refgen4-0p9-supply = <&vreg_l1f_e1>;
++	vdda-refgen4-1p2-supply = <&vreg_l4f_e1>;
+ };
+ 
+ &tlmm {
+@@ -997,8 +1010,8 @@
+ };
+ 
+ &usb_0_qmpphy {
+-	vdda-phy-supply = <&vreg_l4h_e0>;
+-	vdda-pll-supply = <&vreg_l3f_e0>;
++	vdda-phy-supply = <&vreg_l3f_e0>;
++	vdda-pll-supply = <&vreg_l4h_e0>;
+ 	refgen-supply = <&vreg_l2f_e0>;
+ 
+ 	status = "okay";
+@@ -1026,8 +1039,8 @@
+ };
+ 
+ &usb_1_qmpphy {
+-	vdda-phy-supply = <&vreg_l4h_e0>;
+-	vdda-pll-supply = <&vreg_l1h_e0>;
++	vdda-phy-supply = <&vreg_l1h_e0>;
++	vdda-pll-supply = <&vreg_l4h_e0>;
+ 	refgen-supply = <&vreg_l2f_e0>;
+ 
+ 	status = "okay";
+@@ -1038,9 +1051,9 @@
+ };
+ 
+ &usb_2_qmpphy {
+-	vdda-phy-supply = <&vreg_l4h_e0>;
+-	vdda-pll-supply = <&vreg_l3f_e0>;
+-	refgen-supply = <&vreg_l2f_e0>;
++	vdda-phy-supply = <&vreg_l4c_e1>;
++	vdda-pll-supply = <&vreg_l4f_e1>;
++	refgen-supply = <&vreg_l4f_e1>;
+ 
+ 	/delete-property/ mode-switch;
+ 	/delete-property/ orientation-switch;
+@@ -1083,17 +1096,17 @@
+ };
+ 
+ &usb_mp_qmpphy0 {
+-	vdda-phy-supply = <&vreg_l4h_e0>;
+-	vdda-pll-supply = <&vreg_l2h_e0>;
+-	refgen-supply = <&vreg_l1f_e1>;
++	vdda-phy-supply = <&vreg_l2h_e0>;
++	vdda-pll-supply = <&vreg_l4h_e0>;
++	refgen-supply = <&vreg_l4f_e1>;
+ 
+ 	status = "okay";
+ };
+ 
+ &usb_mp_qmpphy1 {
+-	vdda-phy-supply = <&vreg_l4h_e0>;
+-	vdda-pll-supply = <&vreg_l2h_e0>;
+-	refgen-supply = <&vreg_l1f_e1>;
++	vdda-phy-supply = <&vreg_l2h_e0>;
++	vdda-pll-supply = <&vreg_l4h_e0>;
++	refgen-supply = <&vreg_l4f_e1>;
+ 
+ 	status = "okay";
+ };
