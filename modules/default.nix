@@ -16,7 +16,7 @@ let
       $out/lib/firmware/ath12k/QCC2072/hw1.0/firmware-2.bin
   '';
   earlyModules = [
-    "tcsrcc-glymur" "phy_qcom_qmp_pcie"
+    "tcsrcc-glymur" "phy_qcom_qmp_pcie" "phy_qcom_qmp_pcie_multiphy"
     "phy_qcom_m31_eusb2" "phy_qcom_eusb2_repeater"
     "phy_nxp_ptn3222"
     "phy_qcom_qmp_usb" "phy_qcom_qmp_usbc"

@@ -79,10 +79,11 @@ the user's configuration.
 
 ## Updates
 
-The first selective board-v2 backport adds PHY/TCSR supply corrections,
-USB2 redriver descriptions and EC reset protection. See
-[the backport notes](BOARD-V2-BACKPORT.md) for its scope, validation and boot
-test procedure. Existing display/USB workarounds remain enabled.
+The combined board-v2 backport adds PHY/TCSR supply corrections, USB2
+repeaters, EC reset protection, PCIe multiphy support, M.2 wireless power
+sequencing, stereo audio/UCM, microphone corrections, LEDs and CMA. See
+[the backport notes](BOARD-V2-BACKPORT.md) for the stage 2 update, validation
+and boot tests. Existing USB-A retention and display workarounds remain.
 
 Update the `a14` input deliberately; its lock pins the shared module and hardware
 dependencies. Avoid making this flake's nixpkgs follow a changing personal

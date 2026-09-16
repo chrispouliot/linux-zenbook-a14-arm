@@ -25,25 +25,9 @@
  * CAMI, presumably the IR camera for Windows Hello; it is not described here.
  */
 
-#include <dt-bindings/leds/common.h>
 #include <dt-bindings/media/video-interfaces.h>
 
-/ {
-	leds {
-		compatible = "gpio-leds";
-
-		pinctrl-0 = <&cam_indicator_en>;
-		pinctrl-names = "default";
-
-		/* Lit by the V4L2 core while the sensor streams. */
-		privacy_led: privacy-led {
-			function = LED_FUNCTION_INDICATOR;
-			color = <LED_COLOR_ID_WHITE>;
-			gpios = <&tlmm 111 GPIO_ACTIVE_HIGH>;
-			default-state = "off";
-		};
-	};
-};
+/* privacy_led and its pinctrl are provided by the board-v2 base DTS. */
 
 /* Camera PMIC, firmware device PML0: 0x08 at 100 kHz on i2c5. */
 &i2c5 {
@@ -157,13 +141,6 @@
 };
 
 &tlmm {
-	cam_indicator_en: cam-indicator-en-state {
-		pins = "gpio111";
-		function = "gpio";
-		drive-strength = <2>;
-		bias-disable;
-	};
-
 	cam_reset4_default: cam-reset4-default-state {
 		pins = "gpio239";
 		function = "gpio";

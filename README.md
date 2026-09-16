@@ -1562,7 +1562,7 @@ These are the project's additions to the pinned Glymur kernel, including device-
 | [Video firmware handling](modules/video.nix) | Installs the generic linux-firmware VPU image; the OEM `qcvss8480.mbn` is an optional manifest entry installed when present, with a warning when it is missing. |
 | [Camera userspace](modules/camera.nix) | Installs libcamera and v4l-utils, keeps PipeWire/WirePlumber enabled, and gives the video group access to udmabuf so the software-ISP camera appears to applications. |
 | [External DP1 link limit](patches/platform/01-external-dp-hbr2.patch) | Caps the second external controller (`mdss_dp1`, af5c000) at HBR2 / 5.4 Gbit/s per lane. The working port-one dock path uses af54000 and can negotiate HBR3. |
-| [Stereo speaker backend](patches/platform/02-audio-stereo.patch) | Restricts the WSA backend to two channels while retaining the existing four-channel audio frontend. |
+| [Stereo speaker backend](patches/platform/02-audio-stereo.patch) | Restricts the WSA backend to two channels; the [board-v2 backport](docs/BOARD-V2-BACKPORT.md) also supplies a matching stereo frontend, UCM and PipeWire layout. |
 | [Keyboard Fn-lock support](patches/platform/03-hid-fn-lock.patch) | Enables Fn-lock for the Zenbook keyboard, with media/brightness keys used directly and Fn for F1–F12. |
 | [PMIC GLINK event logging](patches/platform/04-glink-diagnostics.patch) | Logs received and processed USB-C/display events to diagnose ordering and combined notifications. |
 | [Display hotplug interrupt containment](patches/platform/05-hpd-irq-containment.patch) | Suppresses repeated IRQ-only notifications on the affected external port while retaining real plug/unplug events. |

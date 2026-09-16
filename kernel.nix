@@ -93,6 +93,12 @@ let
 
       # Board-v2 describes the two USB2 redrivers on i2c5 explicitly.
       PHY_NXP_PTN3222 = module;
+      PHY_QCOM_QMP_PCIE_MULTIPHY = module;
+      PCI_PWRCTRL_GENERIC = module;
+      POWER_SEQUENCING_PCIE_M2 = module;
+      LEDS_GPIO = yes;
+      CMA = yes;
+      DMA_CMA = yes;
     } // lib.optionalAttrs (!strictDevmem) {
       # Diagnostic only: lets acpidump read the firmware ACPI tables through
       # /dev/mem on this device-tree boot. See docs/hardware.md.

@@ -1,0 +1,692 @@
+Subject: [PATCH] arm64: dts: qcom: complete A14 v2 board backport
+
+Remaining changes from Bjorn Andersson's supplied v2 DTS, posted base
+68142f986ff04b2b70b31db00f719bf690f64a9a. Applied after stage1.
+Keep local regulator labels, USB/SCMI/display workarounds and HDMI audio.
+Keep explicit QCC2072 Bluetooth identification with the new UART graph;
+the pinned M.2 dynamic Bluetooth-ID table lacks this card.
+Label the privacy LED for our optional V4L2 sensor.
+
+--- a/arch/arm64/boot/dts/qcom/glymur-asus-zenbook-a14-ux3407na.dts
++++ b/arch/arm64/boot/dts/qcom/glymur-asus-zenbook-a14-ux3407na.dts
+@@ -15,6 +15,7 @@
+ 
+ #include <dt-bindings/input/gpio-keys.h>
+ #include <dt-bindings/input/input.h>
++#include <dt-bindings/leds/common.h>
+ #include <dt-bindings/pinctrl/qcom,pmic-gpio.h>
+ 
+ / {
+@@ -30,9 +31,6 @@
+ 		serial0 = &uart14;
+ 	};
+ 
+-	chosen {
+-	};
+-
+ 	clocks {
+ 		sleep_clk: sleep-clk {
+ 			compatible = "fixed-clock";
+@@ -102,6 +100,39 @@
+ 		};
+ 	};
+ 
++	leds {
++		compatible = "gpio-leds";
++
++		pinctrl-0 = <&cam_indicator_en>,
++			    <&keyboard_cam_led>,
++			    <&keyboard_mic_led>;
++		pinctrl-names = "default";
++
++		keyboard-camera-led {
++			function = LED_FUNCTION_INDICATOR;
++			color = <LED_COLOR_ID_ORANGE>;
++			gpios = <&tlmm 120 GPIO_ACTIVE_HIGH>;
++			default-state = "off";
++			panic-indicator;
++		};
++
++		keyboard-mic-led {
++			function = LED_FUNCTION_MICMUTE;
++			color = <LED_COLOR_ID_ORANGE>;
++			gpios = <&tlmm 98 GPIO_ACTIVE_LOW>;
++			default-state = "off";
++			panic-indicator;
++		};
++
++		privacy_led: privacy-led {
++			function = LED_FUNCTION_INDICATOR;
++			color = <LED_COLOR_ID_WHITE>;
++			gpios = <&tlmm 111 GPIO_ACTIVE_HIGH>;
++			default-state = "off";
++			panic-indicator;
++		};
++	};
++
+ 	pmic-glink {
+ 		compatible = "qcom,glymur-pmic-glink",
+ 			     "qcom,pmic-glink";
+@@ -216,16 +247,6 @@
+ 		regulator-boot-on;
+ 	};
+ 
+-	vreg_wcn_0p95: regulator-wcn-0p95 {
+-		compatible = "regulator-fixed";
+-
+-		regulator-name = "VREG_WCN_0P95";
+-		regulator-min-microvolt = <950000>;
+-		regulator-max-microvolt = <950000>;
+-
+-		vin-supply = <&vreg_wcn_3p3>;
+-	};
+-
+ 	vreg_wcn_3p3: regulator-wcn-3p3 {
+ 		compatible = "regulator-fixed";
+ 
+@@ -242,18 +263,23 @@
+ 		regulator-boot-on;
+ 	};
+ 
++	reserved-memory {
++		linux,cma {
++			compatible = "shared-dma-pool";
++			size = <0x0 0x10000000>;
++			reusable;
++			linux,cma-default;
++		};
++	};
++
+ 	sound {
+ 		compatible = "qcom,glymur-sndcard";
+ 		model = "GLYMUR-ASUS-Zenbook-A14-UX3407NA";
+ 
+-		audio-routing = "WooferLeft IN", "WSA WSA_SPK1 OUT",
+-				"TweeterLeft IN", "WSA WSA_SPK2 OUT",
+-				"WooferRight IN", "WSA2 WSA_SPK1 OUT",
+-				"TweeterRight IN", "WSA2 WSA_SPK2 OUT",
++		audio-routing = "SpkrLeft IN", "WSA WSA_SPK1 OUT",
++				"SpkrRight IN", "WSA WSA_SPK2 OUT",
+ 				"VA DMIC0", "vdd-micb",
+-				"VA DMIC1", "vdd-micb",
+-				"VA DMIC2", "vdd-micb",
+-				"VA DMIC3", "vdd-micb";
++				"VA DMIC1", "vdd-micb";
+ 
+ 		va-dai-link {
+ 			link-name = "VA Capture";
+@@ -275,10 +301,8 @@
+ 			link-name = "WSA Playback";
+ 
+ 			codec {
+-				sound-dai = <&left_woofer>, <&left_tweeter>,
+-					    <&swr0 0>, <&lpass_wsamacro 0>,
+-					    <&right_woofer>, <&right_tweeter>,
+-					    <&swr3 0>, <&lpass_wsa2macro 0>;
++				sound-dai = <&left_speaker>, <&right_speaker>,
++					    <&swr0 0>, <&lpass_wsamacro 0>;
+ 			};
+ 
+ 			cpu {
+@@ -291,61 +315,41 @@
+ 		};
+ 	};
+ 
+-	wcn7850-pmu {
+-		compatible = "qcom,wcn7850-pmu";
+-
+-		vdd-supply = <&vreg_wcn_0p95>;
+-		vddio-supply = <&vreg_l15b_e0>;
+-		vddaon-supply = <&vreg_l15b_e0>;
+-		vdddig-supply = <&vreg_l15b_e0>;
+-		vddrfa1p2-supply = <&vreg_l15b_e0>;
+-		vddrfa1p8-supply = <&vreg_l15b_e0>;
+-
+-		wlan-enable-gpios = <&tlmm 117 GPIO_ACTIVE_HIGH>;
+-		bt-enable-gpios = <&tlmm 116 GPIO_ACTIVE_HIGH>;
++	wlan-connector {
++		compatible = "pcie-m2-e-connector";
++		vpcie3v3-supply = <&vreg_wcn_3p3>;
++		vpcie1v8-supply = <&vreg_l15b_e0>;
++
++		w-disable1-gpios = <&tlmm 117 GPIO_ACTIVE_LOW>;
++		w-disable2-gpios = <&tlmm 116 GPIO_ACTIVE_LOW>;
+ 
+ 		pinctrl-0 = <&wcn_wlan_bt_en>;
+ 		pinctrl-names = "default";
+ 
+-		regulators {
+-			vreg_pmu_rfa_cmn: ldo0 {
+-				regulator-name = "vreg_pmu_rfa_cmn";
+-			};
+-
+-			vreg_pmu_aon_0p59: ldo1 {
+-				regulator-name = "vreg_pmu_aon_0p59";
+-			};
+-
+-			vreg_pmu_wlcx_0p8: ldo2 {
+-				regulator-name = "vreg_pmu_wlcx_0p8";
+-			};
+-
+-			vreg_pmu_wlmx_0p85: ldo3 {
+-				regulator-name = "vreg_pmu_wlmx_0p85";
+-			};
+-
+-			vreg_pmu_btcmx_0p85: ldo4 {
+-				regulator-name = "vreg_pmu_btcmx_0p85";
+-			};
+-
+-			vreg_pmu_rfa_0p8: ldo5 {
+-				regulator-name = "vreg_pmu_rfa_0p8";
+-			};
+-
+-			vreg_pmu_rfa_1p2: ldo6 {
+-				regulator-name = "vreg_pmu_rfa_1p2";
+-			};
+-
+-			vreg_pmu_rfa_1p8: ldo7 {
+-				regulator-name = "vreg_pmu_rfa_1p8";
+-			};
+-
+-			vreg_pmu_pcie_0p9: ldo8 {
+-				regulator-name = "vreg_pmu_pcie_0p9";
+-			};
+-
+-			vreg_pmu_pcie_1p8: ldo9 {
+-				regulator-name = "vreg_pmu_pcie_1p8";
++		ports {
++			#address-cells = <1>;
++			#size-cells = <0>;
++
++			port@0 {
++				reg = <0>;
++				#address-cells = <1>;
++				#size-cells = <0>;
++
++				m2_e_pcie_ep: endpoint@0 {
++					reg = <0>;
++					remote-endpoint = <&pcie4_port0_ep>;
++				};
++			};
++
++			port@3 {
++				reg = <3>;
++				#address-cells = <1>;
++				#size-cells = <0>;
++
++				m2_e_uart_ep: endpoint@0 {
++					reg = <0>;
++					remote-endpoint = <&uart14_ep>;
++				};
+ 			};
+ 		};
+ 	};
+@@ -564,7 +568,6 @@
+ 		#phy-cells = <0>;
+ 	};
+ };
+-
+ 
+ &i2c8 {
+ 	clock-frequency = <400000>;
+@@ -621,6 +624,138 @@
+ 	};
+ };
+ 
++&lpass_vamacro {
++	vdd-micb-supply = <&vreg_l1b_e0>;
++
++	pinctrl-0 = <&dmic01_default>;
++	pinctrl-names = "default";
++
++	qcom,dmic-sample-rate = <2400000>;
++};
++
++&mdss {
++	status = "okay";
++};
++
++&mdss_dp0 {
++	status = "okay";
++};
++
++&mdss_dp0_out {
++	link-frequencies = /bits/ 64 <1620000000 2700000000 5400000000 8100000000>;
++};
++
++&mdss_dp1 {
++	status = "okay";
++};
++
++&mdss_dp1_out {
++	link-frequencies = /bits/ 64 <1620000000 2700000000 5400000000 8100000000>;
++};
++
++&mdss_dp2 {
++	status = "okay";
++};
++
++&mdss_dp2_out {
++	link-frequencies = /bits/ 64 <1620000000 2700000000 5400000000 8100000000>;
++};
++
++&mdss_dp3 {
++	/delete-property/ #sound-dai-cells;
++
++	pinctrl-0 = <&edp0_hpd_default>;
++	pinctrl-names = "default";
++
++	status = "okay";
++
++	aux-bus {
++		panel {
++			compatible = "samsung,atna40ct06", "samsung,atna33xc20";
++			enable-gpios = <&tlmm 18 GPIO_ACTIVE_HIGH>;
++			power-supply = <&vreg_edp>;
++
++			pinctrl-0 = <&edp_bl_en>;
++			pinctrl-names = "default";
++
++			port {
++				edp_panel_in: endpoint {
++					remote-endpoint = <&mdss_dp3_out>;
++				};
++			};
++		};
++	};
++};
++
++&mdss_dp3_out {
++	data-lanes = <0 1 2 3>;
++	link-frequencies = /bits/ 64 <1620000000 2700000000 5400000000 8100000000>;
++
++	remote-endpoint = <&edp_panel_in>;
++};
++
++&mdss_dp3_phy {
++	vdda-phy-supply = <&vreg_l2f_e1>;
++	vdda-pll-supply = <&vreg_l4f_e1>;
++
++	status = "okay";
++};
++
++&pcie3_phy {
++	vdda-phy-supply = <&vreg_l3c_e1>;
++	vdda-pll-supply = <&vreg_l2c_e1>;
++
++	vdda-refgen0p9-supply = <&vreg_l1c_e1>;
++	vdda-refgen1p2-supply = <&vreg_l4f_e1>;
++
++	status = "okay";
++};
++
++&pcie3b {
++	vddpe-3v3-supply = <&vreg_nvme>;
++
++	pinctrl-0 = <&pcie3b_default>;
++	pinctrl-names = "default";
++
++	status = "okay";
++};
++
++&pcie3b_port0 {
++	reset-gpios = <&tlmm 155 GPIO_ACTIVE_LOW>;
++	wake-gpios = <&tlmm 157 GPIO_ACTIVE_LOW>;
++};
++
++&pcie4 {
++	pinctrl-0 = <&pcie4_default>;
++	pinctrl-names = "default";
++
++	status = "okay";
++};
++
++&pcie4_phy {
++	vdda-phy-supply = <&vreg_l1c_e1>;
++	vdda-pll-supply = <&vreg_l4f_e1>;
++
++	status = "okay";
++};
++
++&pcie4_port0 {
++	reset-gpios = <&tlmm 146 GPIO_ACTIVE_LOW>;
++	wake-gpios = <&tlmm 148 GPIO_ACTIVE_LOW>;
++};
++
++&pcie4_port0_ep {
++	remote-endpoint = <&m2_e_pcie_ep>;
++};
++
++&pmh0101_gpios {
++	nvme_reg_en: nvme-reg-en-state {
++		pins = "gpio14";
++		function = "normal";
++		bias-disable;
++	};
++};
++
+ &pmh0110_f_e0_gpios {
+ 	misc_3p3_reg_en: misc-3p3-reg-en-state {
+ 		pins = "gpio6";
+@@ -634,147 +769,6 @@
+ 	};
+ };
+ 
+-&lpass_vamacro {
+-	vdd-micb-supply = <&vreg_l1b_e0>;
+-
+-	pinctrl-0 = <&dmic01_default>, <&dmic23_default>;
+-	pinctrl-names = "default";
+-
+-	qcom,dmic-sample-rate = <4800000>;
+-};
+-
+-&mdss {
+-	status = "okay";
+-};
+-
+-&mdss_dp0 {
+-	status = "okay";
+-};
+-
+-&mdss_dp0_out {
+-	link-frequencies = /bits/ 64 <1620000000 2700000000 5400000000 8100000000>;
+-};
+-
+-&mdss_dp1 {
+-	status = "okay";
+-};
+-
+-&mdss_dp1_out {
+-	link-frequencies = /bits/ 64 <1620000000 2700000000 5400000000 8100000000>;
+-};
+-
+-&mdss_dp2 {
+-	status = "okay";
+-};
+-
+-&mdss_dp2_out {
+-	link-frequencies = /bits/ 64 <1620000000 2700000000 5400000000 8100000000>;
+-};
+-
+-&mdss_dp3 {
+-	/delete-property/ #sound-dai-cells;
+-
+-	pinctrl-0 = <&edp0_hpd_default>;
+-	pinctrl-names = "default";
+-
+-	status = "okay";
+-
+-	aux-bus {
+-		panel {
+-			compatible = "samsung,atna40ct06", "samsung,atna33xc20";
+-			enable-gpios = <&tlmm 18 GPIO_ACTIVE_HIGH>;
+-			power-supply = <&vreg_edp>;
+-
+-			pinctrl-0 = <&edp_bl_en>;
+-			pinctrl-names = "default";
+-
+-			port {
+-				edp_panel_in: endpoint {
+-					remote-endpoint = <&mdss_dp3_out>;
+-				};
+-			};
+-		};
+-	};
+-};
+-
+-&mdss_dp3_out {
+-	data-lanes = <0 1 2 3>;
+-	link-frequencies = /bits/ 64 <1620000000 2700000000 5400000000 8100000000>;
+-
+-	remote-endpoint = <&edp_panel_in>;
+-};
+-
+-&mdss_dp3_phy {
+-	vdda-phy-supply = <&vreg_l2f_e1>;
+-	vdda-pll-supply = <&vreg_l4f_e1>;
+-
+-	status = "okay";
+-};
+-
+-&pcie3b {
+-	vddpe-3v3-supply = <&vreg_nvme>;
+-
+-	pinctrl-0 = <&pcie3b_default>;
+-	pinctrl-names = "default";
+-
+-	status = "okay";
+-};
+-
+-/* This will become &pcie3_phy, which may result in an ABI breakage */
+-&pcie3b_phy {
+-	vdda-phy-supply = <&vreg_l3c_e1>;
+-	vdda-pll-supply = <&vreg_l2c_e1>;
+-
+-	status = "okay";
+-};
+-
+-&pcie3b_port0 {
+-	reset-gpios = <&tlmm 155 GPIO_ACTIVE_LOW>;
+-	wake-gpios = <&tlmm 157 GPIO_ACTIVE_LOW>;
+-};
+-
+-&pcie4 {
+-	pinctrl-0 = <&pcie4_default>;
+-	pinctrl-names = "default";
+-
+-	status = "okay";
+-};
+-
+-&pcie4_phy {
+-	vdda-phy-supply = <&vreg_l1c_e1>;
+-	vdda-pll-supply = <&vreg_l4f_e1>;
+-
+-	status = "okay";
+-};
+-
+-&pcie4_port0 {
+-	reset-gpios = <&tlmm 146 GPIO_ACTIVE_LOW>;
+-	wake-gpios = <&tlmm 148 GPIO_ACTIVE_LOW>;
+-
+-	wifi@0 {
+-		compatible = "pci17cb,1107";
+-		reg = <0x10000 0x0 0x0 0x0 0x0>;
+-
+-		vddaon-supply = <&vreg_pmu_aon_0p59>;
+-		vddwlcx-supply = <&vreg_pmu_wlcx_0p8>;
+-		vddwlmx-supply = <&vreg_pmu_wlmx_0p85>;
+-		vddrfacmn-supply = <&vreg_pmu_rfa_cmn>;
+-		vddrfa0p8-supply = <&vreg_pmu_rfa_0p8>;
+-		vddrfa1p2-supply = <&vreg_pmu_rfa_1p2>;
+-		vddrfa1p8-supply = <&vreg_pmu_rfa_1p8>;
+-		vddpcie0p9-supply = <&vreg_pmu_pcie_0p9>;
+-		vddpcie1p8-supply = <&vreg_pmu_pcie_1p8>;
+-	};
+-};
+-
+-&pmh0101_gpios {
+-	nvme_reg_en: nvme-reg-en-state {
+-		pins = "gpio14";
+-		function = "normal";
+-		bias-disable;
+-	};
+-};
+-
+ &pmk8850_rtc {
+ 	qcom,no-alarm;
+ };
+@@ -802,7 +796,6 @@
+ 	vdd3-supply = <&vreg_l7b_e0>;
+ };
+ 
+-
+ &smb2370_k_e2_eusb2_repeater {
+ 	vdd18-supply = <&vreg_l15b_e0>;
+ 	vdd3-supply = <&vreg_l7b_e0>;
+@@ -811,53 +804,25 @@
+ &swr0 {
+ 	status = "okay";
+ 
+-	/* WSA8845, left woofer */
+-	left_woofer: speaker@0,0 {
++	/* WSA8845, left */
++	left_speaker: speaker@0,0 {
+ 		compatible = "sdw20217020400";
+ 		reg = <0 0>;
+ 		reset-gpios = <&lpass_tlmm 12 GPIO_ACTIVE_LOW>;
+ 		#sound-dai-cells = <0>;
+-		sound-name-prefix = "WooferLeft";
++		sound-name-prefix = "SpkrLeft";
+ 		vdd-1p8-supply = <&vreg_l15b_e0>;
+ 		vdd-io-supply = <&vreg_l18b_e0>;
+ 		qcom,port-mapping = <1 2 3 7 12 14>;
+ 	};
+ 
+-	/* WSA8845, left tweeter */
+-	left_tweeter: speaker@0,1 {
++	/* WSA8845, right */
++	right_speaker: speaker@0,1 {
+ 		compatible = "sdw20217020400";
+ 		reg = <0 1>;
+ 		reset-gpios = <&lpass_tlmm 12 GPIO_ACTIVE_LOW>;
+ 		#sound-dai-cells = <0>;
+-		sound-name-prefix = "TweeterLeft";
+-		vdd-1p8-supply = <&vreg_l15b_e0>;
+-		vdd-io-supply = <&vreg_l18b_e0>;
+-		qcom,port-mapping = <4 5 6 7 13 15>;
+-	};
+-};
+-
+-&swr3 {
+-	status = "okay";
+-
+-	/* WSA8845, right woofer */
+-	right_woofer: speaker@0,0 {
+-		compatible = "sdw20217020400";
+-		reg = <0 0>;
+-		reset-gpios = <&lpass_tlmm 13 GPIO_ACTIVE_LOW>;
+-		#sound-dai-cells = <0>;
+-		sound-name-prefix = "WooferRight";
+-		vdd-1p8-supply = <&vreg_l15b_e0>;
+-		vdd-io-supply = <&vreg_l18b_e0>;
+-		qcom,port-mapping = <1 2 3 7 12 14>;
+-	};
+-
+-	/* WSA8845, right tweeter */
+-	right_tweeter: speaker@0,1 {
+-		compatible = "sdw20217020400";
+-		reg = <0 1>;
+-		reset-gpios = <&lpass_tlmm 13 GPIO_ACTIVE_LOW>;
+-		#sound-dai-cells = <0>;
+-		sound-name-prefix = "TweeterRight";
++		sound-name-prefix = "SpkrRight";
+ 		vdd-1p8-supply = <&vreg_l15b_e0>;
+ 		vdd-io-supply = <&vreg_l18b_e0>;
+ 		qcom,port-mapping = <4 5 6 7 13 15>;
+@@ -915,7 +880,6 @@
+ 			pins = "gpio48";
+ 			function = "gpio";
+ 			bias-disable;
+-			output-high;
+ 		};
+ 
+ 		int-pins {
+@@ -951,6 +915,20 @@
+ 		bias-disable;
+ 	};
+ 
++	keyboard_mic_led: keyboard-mic-led-state {
++		pins = "gpio98";
++		function = "gpio";
++		drive-strength = <2>;
++		bias-disable;
++	};
++
++	cam_indicator_en: cam-indicator-en-state {
++		pins = "gpio111";
++		function = "gpio";
++		drive-strength = <2>;
++		bias-disable;
++	};
++
+ 	wcn_wlan_bt_en: wcn-wlan-bt-en-state {
+ 		pins = "gpio116", "gpio117";
+ 		function = "gpio";
+@@ -961,6 +939,13 @@
+ 	edp0_hpd_default: edp0-hpd-default-state {
+ 		pins = "gpio119";
+ 		function = "edp0_hot";
++		bias-disable;
++	};
++
++	keyboard_cam_led: keyboard-cam-led-state {
++		pins = "gpio120";
++		function = "gpio";
++		drive-strength = <2>;
+ 		bias-disable;
+ 	};
+ 
+@@ -1020,17 +1005,10 @@
+ &uart14 {
+ 	status = "okay";
+ 
+-	bluetooth {
+-		compatible = "qcom,wcn7850-bt";
+-		max-speed = <3200000>;
+-
+-		vddaon-supply = <&vreg_pmu_aon_0p59>;
+-		vddwlcx-supply = <&vreg_pmu_wlcx_0p8>;
+-		vddwlmx-supply = <&vreg_pmu_wlmx_0p85>;
+-		vddrfacmn-supply = <&vreg_pmu_rfa_cmn>;
+-		vddrfa0p8-supply = <&vreg_pmu_rfa_0p8>;
+-		vddrfa1p2-supply = <&vreg_pmu_rfa_1p2>;
+-		vddrfa1p8-supply = <&vreg_pmu_rfa_1p8>;
++	port {
++		uart14_ep: endpoint {
++			remote-endpoint = <&m2_e_uart_ep>;
++		};
+ 	};
+ };
+ 
+@@ -1259,6 +1237,7 @@
+  &uart14 {
+ 	bluetooth {
+ 		compatible = "qcom,qcc2072-bt";
++		max-speed = <3200000>;
+ 	};
+ };
+ 
+@@ -1273,30 +1252,9 @@
+ 	maximum-speed = "super-speed";
+ };
+ /* END A14 dock USB Gen1 experiment v1 */
+-/*
+- * ASUS Zenbook A14 UX3407NA audio overrides.
+- *
+- * Keep only the two physical WSA8845 codecs attached to swr0 and add
+- * the built-in HDMI audio backend. The HDMI connector is fed by
+- * mdss_dp2 through the Parade PS185 HDMI bridge.
+- */
+-
++
++/* Preserve the built-in HDMI audio backend alongside upstream stereo. */
+ &{/sound} {
+-	audio-routing =
+-		"WooferLeft IN", "WSA WSA_SPK1 OUT",
+-		"TweeterLeft IN", "WSA WSA_SPK2 OUT",
+-		"VA DMIC0", "vdd-micb",
+-		"VA DMIC1", "vdd-micb",
+-		"VA DMIC2", "vdd-micb",
+-		"VA DMIC3", "vdd-micb";
+-
+-	wsa-dai-link {
+-		codec {
+-			sound-dai = <&left_woofer>, <&left_tweeter>,
+-				    <&swr0 0>, <&lpass_wsamacro 0>;
+-		};
+-	};
+-
+ 	displayport-2-dai-link {
+ 		link-name = "DisplayPort2 Playback";
+ 

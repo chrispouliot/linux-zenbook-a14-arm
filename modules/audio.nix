@@ -45,96 +45,25 @@ let
   # internal speakers and microphones down with it.
   #
   # HDMI is exposed separately at runtime by a14HdmiAudioHotplug below.
-  a14Ucm = hardwarePkgs.runCommand "a14-ucm-two-speaker" {
-    nativeBuildInputs = [
-      hardwarePkgs.buildPackages.gnused
-    ];
-  } ''
+  # alsa-ucm-conf PR #858 at c9d323590229951391433ed88ae2061df897ff2b.
+  # The direct card mapping preserves the working DMI alias on our kernel.
+  a14Ucm = hardwarePkgs.runCommand "a14-ucm-two-speaker" {} ''
     mkdir -p $out/share/alsa
-
-    cp -a \
-      ${hardwarePkgs.alsa-ucm-conf}/share/alsa/ucm2 \
-      $out/share/alsa/ucm2
-
+    cp -a ${hardwarePkgs.alsa-ucm-conf}/share/alsa/ucm2 $out/share/alsa/ucm2
     chmod -R u+w $out/share/alsa/ucm2
+    cp -r ${../patches/audio/ucm2}/. $out/share/alsa/ucm2/
 
-
-    # ------------------------------------------------------------
-    # ASUS UX3407NA card-name mapping
-    # ------------------------------------------------------------
-
-    ln -sf \
-      ../../Qualcomm/glymur/GLYMUR-CRD.conf \
+    ln -sf ../../Qualcomm/glymur/ASUS-Zenbook-A14-UX3407NA.conf \
       $out/share/alsa/ucm2/conf.d/glymur/ASUSTeKCOMPUTERINC.-ZenbookA14UX3407NA-1.0-UX3407NA.conf
 
-
-    # ------------------------------------------------------------
-    # Keep only the two physical WSA8845 codecs on swr0
-    # ------------------------------------------------------------
-
-    # The current DT names the two real swr0 codecs WooferLeft and
-    # TweeterLeft, despite them functioning as the laptop's two physical
-    # stereo speakers.
-    #
-    # Remove only the nonexistent codecs currently described as
-    # WooferRight/TweeterRight on swr3.
-    for f in \
-      $out/share/alsa/ucm2/codecs/wsa884x/four-speakers/SpeakerSeq.conf \
-      $out/share/alsa/ucm2/codecs/wsa884x/four-speakers/DefaultEnableSeq.conf \
-      $out/share/alsa/ucm2/codecs/wsa884x/four-speakers/init.conf
-    do
-      sed -i \
-        -e '/WooferRight/d' \
-        -e '/TweeterRight/d' \
-        "$f"
-    done
-
-
-    # ------------------------------------------------------------
-    # Remove WSA2/swr3 from the Glymur UCM
-    # ------------------------------------------------------------
-
-    # Only WSA/swr0 is physically populated on the UX3407NA.
-    sed -i \
-      -e '/Wsa2SpeakerEnableSeq/d' \
-      -e '/Wsa2SpeakerDisableSeq/d' \
-      $out/share/alsa/ucm2/Qualcomm/glymur/HiFi.conf
-
-    # The generic four-speaker card initialization also configures the
-    # WSA2 macro. Remove those commands for this machine.
-    sed -i \
-      '/WSA2/d' \
-      $out/share/alsa/ucm2/codecs/qcom-lpass/wsa-macro/four-speakers/init.conf
-
-
-    # ------------------------------------------------------------
-    # Sanity checks
-    # ------------------------------------------------------------
-
-    # MultiMedia1 remains the stock four-channel AudioReach frontend.
-    grep -q \
-      'PlaybackChannels 4' \
-      $out/share/alsa/ucm2/Qualcomm/glymur/HiFi.conf
-
-    # HDMI must not be part of the always-on UCM HiFi profile.
-    if grep -qE \
-      'HDMI2|DISPLAY_PORT_RX_2|DP2 Jack|CardId},4' \
-      $out/share/alsa/ucm2/Qualcomm/glymur/HiFi.conf
+    grep -q 'PlaybackChannels 2' \
+      $out/share/alsa/ucm2/Qualcomm/glymur/ZenbookA14-HiFi.conf
+    if grep -qE 'HDMI2|DISPLAY_PORT_RX_2|DP2 Jack|CardId},4|Wsa2Speaker' \
+      $out/share/alsa/ucm2/Qualcomm/glymur/ZenbookA14-HiFi.conf
     then
-      echo "ERROR: HDMI leaked into the always-on A14 UCM HiFi profile"
+      echo "ERROR: unexpected HDMI or WSA2 route in the A14 internal UCM profile"
       exit 1
     fi
-
-    if grep -RqiE \
-      'WooferRight|TweeterRight|Wsa2Speaker' \
-      $out/share/alsa/ucm2/Qualcomm/glymur \
-      $out/share/alsa/ucm2/codecs/wsa884x/four-speakers
-    then
-      echo "ERROR: nonexistent WSA2 speaker references remain in A14 UCM"
-      exit 1
-    fi
-
-    echo "ASUS A14 always-on Speaker + Mic UCM prepared successfully"
   '';
 
 
@@ -292,21 +221,11 @@ in {
 
 
   # ------------------------------------------------------------
-  # ASUS UX3407NA speaker mapping + transparent 1.50x boost
+  # ASUS UX3407NA stereo speaker mapping + configurable gain
   # ------------------------------------------------------------
 
-  # MultiMedia1 is intentionally a four-channel frontend, while the two real
-  # physical speakers occupy slots 0 and 2:
-  #
-  #   slot 0 -> physical left
-  #   slot 1 -> unused
-  #   slot 2 -> physical right
-  #   slot 3 -> unused
-  #
-  # Tell PipeWire that layout so ordinary stereo FL/FR lands on slots 0/2.
-  # Apply the 1.50x gain *inside* the real speaker node with WirePlumber's
-  # internal filter graph. This gives desktop applications exactly one visible
-  # internal output named "Speakers"; there is no separate raw/boosted sink.
+  # The topology and UCM now expose two channels matching SpkrLeft/SpkrRight.
+  # Keep the user's speakerGain inside the existing single visible speaker node.
   #
   # Force the A14 card to the UCM HiFi profile. HDMI is no longer part of that
   # profile, so HiFi remains valid whether a display is connected or not.
@@ -336,8 +255,8 @@ in {
 
         actions = {
           update-props = {
-            audio.channels = 4
-            audio.position = [ FL RL FR RR ]
+            audio.channels = 2
+            audio.position = [ FL FR ]
             node.description = "Speakers"
             priority.session = 1400
           }

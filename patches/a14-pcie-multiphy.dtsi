@@ -1,0 +1,120 @@
+// SPDX-License-Identifier: BSD-3-Clause
+/*
+ * Glymur PCIe3 multiphy dependency from the board-v2 posted base
+ * 68142f986ff04b2b70b31db00f719bf690f64a9a.
+ * Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
+ *
+ * Scope the SoC migration to the A14 on the pinned kernel. Other Glymur
+ * boards retain their old PCIe3b provider. The A14 uses port B (index 1).
+ */
+&{/soc@0} {
+	pcie3_phy: phy@f00000 {
+		compatible = "qcom,glymur-qmp-gen5x8-pcie-phy";
+		reg = <0x0 0x00f00000 0x0 0x10000>,
+		      <0x0 0x00f10000 0x0 0x10000>;
+		reg-names = "port_a",
+			    "port_b";
+
+		clocks = <&gcc GCC_PCIE_PHY_3A_AUX_CLK>,
+			 <&gcc GCC_PCIE_3A_CFG_AHB_CLK>,
+			 <&tcsr TCSR_PCIE_3_CLKREF_EN>,
+			 <&gcc GCC_PCIE_3A_PHY_RCHNG_CLK>,
+			 <&gcc GCC_PCIE_3A_PIPE_CLK>,
+			 <&gcc GCC_PCIE_PHY_3B_AUX_CLK>,
+			 <&gcc GCC_PCIE_3B_CFG_AHB_CLK>,
+			 <&gcc GCC_PCIE_3B_PHY_RCHNG_CLK>,
+			 <&gcc GCC_PCIE_3B_PIPE_CLK>,
+			 <&gcc GCC_PCIE_3B_PIPE_DIV2_CLK>;
+		clock-names = "aux",
+			      "cfg_ahb",
+			      "ref",
+			      "rchng",
+			      "pipe",
+			      "phy_b_aux",
+			      "cfg_ahb_b",
+			      "rchng_b",
+			      "pipe_b",
+			      "pipediv2_b";
+
+		resets = <&gcc GCC_PCIE_3A_PHY_BCR>,
+			 <&gcc GCC_PCIE_3A_NOCSR_COM_PHY_BCR>,
+			 <&gcc GCC_PCIE_3B_PHY_BCR>,
+			 <&gcc GCC_PCIE_3B_NOCSR_COM_PHY_BCR>;
+		reset-names = "port_a",
+			      "port_a_nocsr",
+			      "port_b",
+			      "port_b_nocsr";
+
+		assigned-clocks = <&gcc GCC_PCIE_3A_PHY_RCHNG_CLK>,
+				  <&gcc GCC_PCIE_3B_PHY_RCHNG_CLK>;
+		assigned-clock-rates = <100000000>, <100000000>;
+
+		power-domains = <&gcc GCC_PCIE_3A_PHY_GDSC>,
+				<&gcc GCC_PCIE_3B_PHY_GDSC>;
+		power-domain-names = "port_a", "port_b";
+
+		qcom,link-mode = <&tcsr 0x5000>;
+
+		#clock-cells = <1>;
+		clock-output-names = "pcie3a_pipe_clk",
+				     "pcie3b_pipe_clk";
+
+		#phy-cells = <1>;
+
+		status = "disabled";
+	};
+};
+
+&pcie3b_phy {
+	status = "disabled";
+};
+
+&pcie3b_port0 {
+	phys = <&pcie3_phy 1>;
+};
+
+&gcc {
+	clocks = <&rpmhcc RPMH_CXO_CLK>,	/* Board XO source */
+		 <&rpmhcc RPMH_CXO_CLK_A>,	/* Board XO_A source */
+		 <&sleep_clk>,			/* Sleep */
+		 <0>,				/* USB 0 Phy DP0 GMUX */
+		 <0>,				/* USB 0 Phy DP1 GMUX */
+		 <0>,				/* USB 0 Phy PCIE PIPEGMUX */
+		 <0>,				/* USB 0 Phy PIPEGMUX */
+		 <0>,				/* USB 0 Phy SYS PCIE PIPEGMUX */
+		 <0>,				/* USB 1 Phy DP0 GMUX 2 */
+		 <0>,				/* USB 1 Phy DP1 GMUX 2 */
+		 <0>,				/* USB 1 Phy PCIE PIPEGMUX */
+		 <0>,				/* USB 1 Phy PIPEGMUX */
+		 <0>,				/* USB 1 Phy SYS PCIE PIPEGMUX */
+		 <0>,				/* USB 2 Phy DP0 GMUX 2 */
+		 <0>,				/* USB 2 Phy DP1 GMUX 2 */
+		 <0>,				/* USB 2 Phy PCIE PIPEGMUX */
+		 <0>,				/* USB 2 Phy PIPEGMUX */
+		 <0>,				/* USB 2 Phy SYS PCIE PIPEGMUX */
+		 <&pcie3_phy 0>,			/* PCIe 3a */
+		 <&pcie3_phy 1>,			/* PCIe 3b */
+		 <&pcie4_phy>,			/* PCIe 4 */
+		 <&pcie5_phy>,			/* PCIe 5 */
+		 <&pcie6_phy>,			/* PCIe 6 */
+		 <0>,				/* QUSB4 0 PHY RX 0 */
+		 <0>,				/* QUSB4 0 PHY RX 1 */
+		 <0>,				/* QUSB4 1 PHY RX 0 */
+		 <0>,				/* QUSB4 1 PHY RX 1 */
+		 <0>,				/* QUSB4 2 PHY RX 0 */
+		 <0>,				/* QUSB4 2 PHY RX 1 */
+		 <0>,				/* UFS PHY RX Symbol 0 */
+		 <0>,				/* UFS PHY RX Symbol 1 */
+		 <0>,				/* UFS PHY TX Symbol 0 */
+		 <&usb_0_qmpphy QMP_USB43DP_USB3_PIPE_CLK>,
+		 <&usb_1_qmpphy QMP_USB43DP_USB3_PIPE_CLK>,
+		 <&usb_2_qmpphy QMP_USB43DP_USB3_PIPE_CLK>,
+		 <&usb_mp_qmpphy0>,		/* USB3 UNI PHY pipe 0 */
+		 <&usb_mp_qmpphy1>,		/* USB3 UNI PHY pipe 1 */
+		 <0>,				/* USB4 PHY 0 pcie pipe */
+		 <0>,				/* USB4 PHY 0 Max pipe */
+		 <0>,				/* USB4 PHY 1 pcie pipe */
+		 <0>,				/* USB4 PHY 1 Max pipe */
+		 <0>,				/* USB4 PHY 2 pcie */
+		 <0>;				/* USB4 PHY 2 Max */
+};
