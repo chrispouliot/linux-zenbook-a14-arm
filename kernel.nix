@@ -61,6 +61,15 @@ let
     buildDTBs = true;
     ignoreConfigErrors = true;
 
+    # New Kconfig symbols must exist during Nixpkgs' separate config build.
+    # An overrideAttrs-only patch is too late for that derivation.
+    kernelPatches = [
+      {
+        name = "a14-glymur-pcie-multiphy";
+        patch = ./patches/board-v2/04-pcie-multiphy-driver.patch;
+      }
+    ];
+
     structuredExtraConfig = with lib.kernel; {
       ARCH_QCOM = yes;
 
@@ -125,6 +134,13 @@ let
   };
 
   a14Kernel = baseKernel.overrideAttrs (old: {
+    postConfigure = (old.postConfigure or "") + ''
+      if ! grep -qx 'CONFIG_PHY_QCOM_QMP_PCIE_MULTIPHY=m' "$buildRoot/.config"; then
+        echo "ERROR: A14 PCIe multiphy must be enabled as a module for the initrd" >&2
+        exit 1
+      fi
+    '';
+
     patches = (old.patches or []) ++ [
       ./patches/a14-dp-boot-order-debug.patch
       ./patches/a14-glymur-ucsi-dp-mux-race.patch

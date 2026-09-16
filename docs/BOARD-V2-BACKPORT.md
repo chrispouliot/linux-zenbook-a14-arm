@@ -32,9 +32,10 @@ The eDP dependency is already represented by the pinned/local display stack.
 ## Backport adaptations
 
 - `patches/board-v2/01` through `03` are retained from stage 1. `04` adds the
-  PCIe driver/binding; `05` completes the board description. The recipe
-  runs after the existing platform/display recipe and before camera/video
-  board fragments.
+  PCIe driver/binding through `buildLinux.kernelPatches`, so it is present
+  during both Nixpkgs' separate configuration build and the kernel build.
+  `05` completes the board description. The board recipe runs after the
+  existing platform/display recipe and before camera/video board fragments.
 - `a14-pcie-multiphy.dtsi` carries the needed SoC node, GCC clock inputs and
   PCIe3b PHY reference **only for the A14**. The old PCIe3b PHY is disabled
   on this board; other Glymur boards retain their existing provider. The
@@ -78,6 +79,24 @@ is not added here. It is not established that our pinned kernel needs it.
 Playback start/stop, idle, and resume testing will determine whether our
 new audio configuration exposes the same problem. Existing retries do not
 make unconditional changes such as USB power retention automatically stop.
+
+## Stage 2 configuration-build correction
+
+The original stage 2 package applied the new PCIe driver only in the final
+kernel's `overrideAttrs.postPatch`. Nixpkgs' separate `linux-config`
+derivation could not see the new Kconfig symbol, so the requested module
+was omitted and the initrd build failed with `phy_qcom_qmp_pcie_multiphy not
+found`. The follow-up `a14-stage2-multiphy-config-fix.patch` moves this driver
+patch to `buildLinux.kernelPatches` and removes its late duplicate. An early
+kernel `postConfigure` check now requires
+`CONFIG_PHY_QCOM_QMP_PCIE_MULTIPHY=m` before compilation proceeds.
+
+Apply that correction on top of the original stage 2 package and rebuild.
+It changes the build integration, not the driver code or device tree. The
+corrected order replays with zero fuzz/offsets; changed Nix files parse,
+and the driver integration files match the previously compiled source.
+The Nixpkgs configuration/build plumbing was checked against the pinned
+source, but a full NixOS rebuild still must be performed on the build host.
 
 ## Apply and boot-test
 
