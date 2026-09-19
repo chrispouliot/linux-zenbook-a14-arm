@@ -152,7 +152,9 @@ let
     postPatch = (old.postPatch or "") + (import ./kernel/a14-post-patch.nix)
       + (import ./kernel/a14-board-v2-post-patch.nix)
       + lib.optionalString camera (import ./kernel/a14-camera-post-patch.nix)
-      + lib.optionalString video ((import ./kernel/a14-video-post-patch.nix) videoFirmwareName);
+      + lib.optionalString video ((import ./kernel/a14-video-post-patch.nix) videoFirmwareName)
+      # Optional at runtime; keep the recorded display baseline unchanged.
+      + (import ./kernel/a14-dsc-blank-test.nix);
   });
 
 in

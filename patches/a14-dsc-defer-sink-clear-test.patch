@@ -1,0 +1,131 @@
+Subject: [EXPERIMENT] drm/msm/dp: defer A14 sink compression clear during blanking
+
+Disabled by default. Requires the existing A14 wake, sink-power and sink-cleanup
+gates, successful PUSH_IDLE, and active stream clocks. Retains source cleanup,
+D3, failure cleanup, and checked sink clearing on the next start.
+
+--- a/drivers/gpu/drm/msm/dp/dp_ctrl.c
++++ b/drivers/gpu/drm/msm/dp/dp_ctrl.c
+@@ -29,6 +29,11 @@
+ #include "dp_tu_calc.h"
+ #include <drm/drm_fixed.h>
+ 
++static bool a14_dp_defer_sink_clear_test;
++module_param(a14_dp_defer_sink_clear_test, bool, 0444);
++MODULE_PARM_DESC(a14_dp_defer_sink_clear_test,
++	"Test deferring A14 port-one sink DSC/FEC clear from blanking to next start");
++
+ static bool a14_dp_dsc_wake_test;
+ module_param(a14_dp_dsc_wake_test, bool, 0444);
+ MODULE_PARM_DESC(a14_dp_dsc_wake_test,
+@@ -177,6 +182,7 @@
+ 	bool stream_clks_on;
+ 	struct msm_dp_dsc_cfg_data dsc_data;
+ 	bool dsc_configured;
++	bool a14_idle_completed;
+ 	u32 a14_state_trace_sequence;
+ };
+ 
+@@ -810,8 +816,9 @@
+ 	reinit_completion(&ctrl->idle_comp);
+ 	msm_dp_write_link(ctrl, REG_DP_STATE_CTRL, DP_STATE_CTRL_PUSH_IDLE);
+ 
+-	if (!wait_for_completion_timeout(&ctrl->idle_comp,
+-			IDLE_PATTERN_COMPLETION_TIMEOUT_JIFFIES))
++	ctrl->a14_idle_completed = !!wait_for_completion_timeout(&ctrl->idle_comp,
++			IDLE_PATTERN_COMPLETION_TIMEOUT_JIFFIES);
++	if (!ctrl->a14_idle_completed)
+ 		pr_warn("PUSH_IDLE pattern timedout\n");
+ 
+ 	drm_dbg_dp(ctrl->drm_dev, "mainlink off\n");
+@@ -2527,11 +2534,15 @@
+ 	return 0;
+ }
+ 
+-static void msm_dp_ctrl_dsc_stop(struct msm_dp_ctrl_private *ctrl)
++static void msm_dp_ctrl_dsc_stop(struct msm_dp_ctrl_private *ctrl, bool defer_sink_clear)
+ {
+ 	if (!ctrl->dsc_configured)
+ 		return;
+-	if (msm_dp_ctrl_a14_wake_enabled(&ctrl->msm_dp_ctrl)) {
++	if (defer_sink_clear) {
++		/* Checked D0 + sink clear still run before the next link start. */
++		dev_info(ctrl->dev,
++			 "A14-DSC-blank: deferring sink DSC/FEC clear until next start\n");
++	} else if (msm_dp_ctrl_a14_wake_enabled(&ctrl->msm_dp_ctrl)) {
+ 		msm_dp_ctrl_a14_teardown_sink(ctrl);
+ 	} else if (msm_dp_aux_is_link_connected(ctrl->aux)) {
+ 		drm_dp_dpcd_writeb(ctrl->aux, DP_DSC_ENABLE, 0);
+@@ -2561,7 +2572,11 @@
+ 
+ 	/* Called while AUX is initialized; never bypass its disconnect guard. */
+ 	if (!on)
+-		msm_dp_ctrl_dsc_stop(ctrl);
++		msm_dp_ctrl_dsc_stop(ctrl,
++			a14_dp_defer_sink_clear_test &&
++			a14_dp_sink_cleanup_test && ctrl->a14_idle_completed &&
++			ctrl->stream_clks_on);
++	/* The board/port, wake and PHY-test guards above also cover this test. */
+ 
+ 	ret = drm_dp_dpcd_readb(ctrl->aux, DP_SET_POWER, &power);
+ 	if (ret != 1)
+@@ -3335,6 +3350,7 @@
+ 		return -EINVAL;
+ 
+ 	ctrl = container_of(msm_dp_ctrl, struct msm_dp_ctrl_private, msm_dp_ctrl);
++	ctrl->a14_idle_completed = false;
+ 
+ 	rate = ctrl->panel->link_info.rate;
+ 	pixel_rate = ctrl->panel->msm_dp_mode.drm_mode.clock;
+@@ -3609,6 +3625,7 @@
+ 		return -EINVAL;
+ 
+ 	ctrl = container_of(msm_dp_ctrl, struct msm_dp_ctrl_private, msm_dp_ctrl);
++	ctrl->a14_idle_completed = false;
+ 
+ 	if (msm_dp_ctrl_a14_edp_native(ctrl) &&
+ 	    !msm_dp_ctrl_a14_edp_link_fits(ctrl)) {
+@@ -3685,7 +3702,7 @@
+ 		msm_dp_panel_dsc_config(ctrl->panel, &ctrl->dsc_data, true);
+ 		ctrl->dsc_configured = true;
+ 	} else {
+-		msm_dp_ctrl_dsc_stop(ctrl);
++		msm_dp_ctrl_dsc_stop(ctrl, false);
+ 		msm_dp_panel_clear_dsc_dto(ctrl->panel);
+ 	}
+ 
+@@ -3707,6 +3724,7 @@
+ 	if (ctrl->dsc_configured)
+ 		msm_dp_panel_override_ack_dto(ctrl->panel, true);
+ 
++	ctrl->a14_idle_completed = false;
+ 	msm_dp_write_link(ctrl, REG_DP_STATE_CTRL, DP_STATE_CTRL_SEND_VIDEO);
+ 
+ 	ret = msm_dp_ctrl_wait4video_ready(ctrl);
+@@ -3730,6 +3748,8 @@
+ 	}
+ 
+ end:
++	if (ret)
++		ctrl->a14_idle_completed = false;
+ 	return ret;
+ }
+ 
+@@ -3742,7 +3762,7 @@
+ 	phy = ctrl->phy;
+ 
+ 	msm_dp_panel_disable_vsc_sdp(ctrl->panel);
+-	msm_dp_ctrl_dsc_stop(ctrl);
++	msm_dp_ctrl_dsc_stop(ctrl, false);
+ 
+ 	/* set dongle to D3 (power off) mode */
+ 	msm_dp_link_psm_config(ctrl->link, &ctrl->panel->link_info, true);
+@@ -3773,7 +3793,7 @@
+ 
+ 	msm_dp_panel_disable_vsc_sdp(ctrl->panel);
+ 
+-	msm_dp_ctrl_dsc_stop(ctrl);
++	msm_dp_ctrl_dsc_stop(ctrl, false);
+ 
+ 	msm_dp_ctrl_mainlink_disable(ctrl);
+ 
