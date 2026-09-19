@@ -8,6 +8,34 @@ The earlier three shutdown-order experiments did not remove the flash.
 This diagnostic separates source idle from subsequent DPU/DSC/FEC and power
 teardown by an adjustable pause. It is not a confirmed fix.
 
+## Native-HPD correction
+
+The initial diagnostic incorrectly required `msm_dp_aux_is_link_connected()`
+to return nonzero. This function reads the controller's native HPD status,
+which the earlier A14 captures show as zero even with working USB-C video.
+The installed parameter could therefore show 1000 while the pause was skipped.
+The failed run had idle at 155.544085 and source cleanup at 155.552974, about
+9 ms later, with no BEGIN/END messages. It did not test the proposed hold.
+
+The correction removes that inappropriate native-HPD predicate. The bridge
+still checks software `plugged` before calling the helper, and the normal AUX
+transfer function retains its disconnect gate. The exact Realtek identity must
+still be read successfully. Other skip conditions now produce explicit logs.
+
+If the original patch is already installed, save the incremental
+`a14-realtek-idle-hpd-fix.patch` in `~/Downloads` and apply:
+
+```bash
+cd ~/Projects/linux-zenbook-a14-arm
+git apply --check ~/Downloads/a14-realtek-idle-hpd-fix.patch
+git apply --whitespace=nowarn ~/Downloads/a14-realtek-idle-hpd-fix.patch
+```
+
+Keep the same boot flags: four older experiments off and
+`msm.a14_dp_realtek_idle_hold_ms=1000`. Rebuild using the local path override
+below, reboot, and repeat the WAVLINK blank test. This correction changes the
+existing inner kernel patch, so it adds no new Nix recipe entry or parameter.
+
 ## What changes
 
 The connected bridge's atomic-disable callback already calls PUSH_IDLE and
@@ -31,7 +59,7 @@ helper without even performing the branch-identity read.
 Additional guards require:
 
 - Existing A14 DSC-wake board/port check (UX3407NA, Glymur DP, af54000);
-- Connected link, successful PUSH_IDLE completion, configured DSC, and enabled
+- Software-connected link, successful PUSH_IDLE completion, configured DSC, and enabled
   core/link/stream clocks;
 - A branch receiver, HBR3 link rate 810000, two active lanes;
 - No PHY compliance test or recorded early D3;
@@ -175,10 +203,12 @@ older experiments and matching the resulting files against the captured
 The new kernel patch applies and reverses exactly without fuzz or offsets. The
 Nix integration parses with the tree-sitter Nix grammar and all five referenced
 patch files exist. The actual new helper and its board/port predicate compile
-in a stubbed C harness with `-Wall -Wextra -Werror`. Fifty-two cases cover guard
+in a stubbed C harness with `-Wall -Wextra -Werror`. The corrected harness covers guard
 failures, conflicting experiments, AUX errors and short reads, every identity
 byte, bounded delay, one-time parameter sampling, and unchanged controller
-state. Callback placement was checked against the pinned DRM atomic helper.
+state. Regression cases separate native HPD from software AUX availability:
+native HPD zero with a successful identity read must pause, while a software
+disconnect must fail the read and skip the pause. Callback placement was checked against the pinned DRM atomic helper.
 The delivery patch was checked for exact application and reversal on the
 four-experiment repository baseline.
 
@@ -191,3 +221,6 @@ Relevant source reviewed:
 
 The Qualcomm-derived SST shutdown path also uses PUSH_IDLE; this research did
 not establish a separate supported no-video/mute register for this hardware.
+
+The incremental native-HPD fix was also checked for application and reversal
+against the installed v1 repository files. No full kernel build was performed.
