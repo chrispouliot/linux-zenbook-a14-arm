@@ -1,0 +1,59 @@
+A14: opt-in direct HBR3 two-lane comparison
+
+Apply after the recorded display stack. Default off; does not change blanking.
+Cap the effective lane count after receiver/endpoint/LTTPR limits and before
+mode selection and training. Leave raw DPCD, USB-C allocation and PHY lane
+mapping alone. Restrict to the A14 af54000 DP controller and non-branch sinks.
+
+diff --git a/drivers/gpu/drm/msm/dp/dp_panel.c b/drivers/gpu/drm/msm/dp/dp_panel.c
+--- a/drivers/gpu/drm/msm/dp/dp_panel.c
++++ b/drivers/gpu/drm/msm/dp/dp_panel.c
+@@ -32,6 +32,12 @@
+ module_param(a14_dp_dsc_144_test, bool, 0444);
+ MODULE_PARM_DESC(a14_dp_dsc_144_test,
+ 	"Also allow the captured 3840x2160 144 Hz DSC timing on port one");
++/* Boot-only diagnostic: compare the direct monitor with the two-lane dock. */
++static bool a14_dp_direct_two_lane_test;
++module_param(a14_dp_direct_two_lane_test, bool, 0444);
++MODULE_PARM_DESC(a14_dp_direct_two_lane_test,
++	"Limit a direct A14 port-one HBR3 link to two lanes for DSC comparison");
++
+ #define DP_INTF_CONFIG_DATABUS_WIDEN     BIT(4)
+ 
+ struct msm_dp_panel_private {
+@@ -101,6 +107,26 @@
+ 	}
+ }
+ 
++static void msm_dp_panel_a14_limit_direct_lanes(struct msm_dp_panel_private *panel)
++{
++	struct msm_dp_panel *dp_panel = &panel->msm_dp_panel;
++	struct msm_dp_link_info *link_info = &dp_panel->link_info;
++
++	if (!a14_dp_direct_two_lane_test ||
++	    !of_machine_is_compatible("asus,zenbook-a14-ux3407na") ||
++	    !of_device_is_compatible(panel->dev->of_node, "qcom,glymur-dp") ||
++	    strcmp(dev_name(panel->dev), "af54000.displayport-controller") ||
++	    drm_dp_is_branch(dp_panel->dpcd) ||
++	    link_info->use_rate_set || link_info->rate != 810000 ||
++	    link_info->num_lanes != 4)
++		return;
++
++	/* Apply before mode selection, DSC bandwidth calculation and training. */
++	link_info->num_lanes = 2;
++	dev_info(panel->dev,
++		 "A14-DP-lanes: direct HBR3 test limiting 4 -> 2 lanes before mode selection\n");
++}
++
+ static int msm_dp_panel_read_dpcd(struct msm_dp_panel *msm_dp_panel)
+ {
+ 	int rc, max_lttpr_lanes, max_lttpr_rate;
+@@ -212,6 +238,8 @@
+ 	/* Limit data lanes from LTTPR capabilities, if any */
+ 	if (max_lttpr_lanes && max_lttpr_lanes < link_info->num_lanes)
+ 		link_info->num_lanes = max_lttpr_lanes;
++
++	msm_dp_panel_a14_limit_direct_lanes(panel);
+ 
+ 	drm_dbg_dp(panel->drm_dev, "version: %d.%d\n", major, minor);
+ 	drm_dbg_dp(panel->drm_dev, "link_rate=%d\n", link_info->rate);
