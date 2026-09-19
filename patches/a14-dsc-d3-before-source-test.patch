@@ -1,0 +1,74 @@
+Subject: [EXPERIMENT 2] drm/msm/dp: request A14 D3 before source DSC shutdown
+
+Apply after a14-dsc-defer-sink-clear-test.patch. Disabled by default.
+With the new gate enabled, a qualifying blank requests D3 with source DSC/FEC
+still configured, waits 20-25ms after acknowledgement, and performs host-only
+cleanup. No receiver AUX access follows the D3 attempt. Failures still clean
+up the host; checked sink clearing on the next start remains unchanged.
+The settling interval is experimental, not a DisplayPort timing requirement.
+
+--- a/drivers/gpu/drm/msm/dp/dp_ctrl.c
++++ b/drivers/gpu/drm/msm/dp/dp_ctrl.c
+@@ -28,6 +28,11 @@
+ #include "dp_link.h"
+ #include "dp_tu_calc.h"
+ #include <drm/drm_fixed.h>
++
++static bool a14_dp_d3_before_dsc_test;
++module_param(a14_dp_d3_before_dsc_test, bool, 0444);
++MODULE_PARM_DESC(a14_dp_d3_before_dsc_test,
++	"Test A14 port-one D3 plus 20ms settle before source DSC/FEC shutdown");
+ 
+ static bool a14_dp_defer_sink_clear_test;
+ module_param(a14_dp_defer_sink_clear_test, bool, 0444);
+@@ -2560,6 +2565,7 @@
+ 	struct msm_dp_ctrl_private *ctrl = container_of(msm_dp_ctrl,
+ 		struct msm_dp_ctrl_private, msm_dp_ctrl);
+ 	u8 power, requested;
++	bool d3_before_dsc;
+ 	int ret;
+ 
+ 	if (!a14_dp_sink_power_test ||
+@@ -2570,8 +2576,13 @@
+ 	    ctrl->link->sink_request & DP_TEST_LINK_PHY_TEST_PATTERN)
+ 		return 0;
+ 
++	/* Restrict the experiment to a successfully idled compressed stream. */
++	d3_before_dsc = !on && a14_dp_d3_before_dsc_test &&
++		a14_dp_sink_cleanup_test && ctrl->a14_idle_completed &&
++		ctrl->stream_clks_on && ctrl->dsc_configured;
++
+ 	/* Called while AUX is initialized; never bypass its disconnect guard. */
+-	if (!on)
++	if (!on && !d3_before_dsc)
+ 		msm_dp_ctrl_dsc_stop(ctrl,
+ 			a14_dp_defer_sink_clear_test &&
+ 			a14_dp_sink_cleanup_test && ctrl->a14_idle_completed &&
+@@ -2600,6 +2611,14 @@
+ 	} else {
+ 		/* No read after D3: the receiver is allowed to go to sleep. */
+ 		dev_info(ctrl->dev, "A14-DP-power: D3 write accepted before PHY shutdown\n");
++		if (d3_before_dsc) {
++			/* Experimental settling interval, not proof the sink has muted. */
++			dev_info(ctrl->dev,
++				 "A14-DSC-blank2: D3 accepted; settling before source stop\n");
++			usleep_range(20000, 25000);
++			/* No sink AUX writes/reads after requesting D3. */
++			msm_dp_ctrl_dsc_stop(ctrl, true);
++		}
+ 	}
+ 	return 0;
+ fail:
+@@ -2607,6 +2626,12 @@
+ 		ret = -EIO;
+ 	dev_warn(ctrl->dev, "A14-DP-power: D%u request failed=%d\n",
+ 		 on ? 0 : 3, ret);
++	if (d3_before_dsc) {
++		/* D3 may have taken effect despite an AUX error; do not probe again. */
++		dev_info(ctrl->dev,
++			 "A14-DSC-blank2: D3 failed; forcing source cleanup\n");
++		msm_dp_ctrl_dsc_stop(ctrl, true);
++	}
+ 	return ret;
+ }
+ 
