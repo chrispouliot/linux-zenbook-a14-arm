@@ -1,0 +1,155 @@
+Subject: [EXPERIMENT 3] drm/msm/dp: request A14 D3 before bridge PUSH_IDLE
+
+Apply after experiments 1 and 2. Disabled by default. On a connected, active
+A14 port-one DSC stream, request D3 and allow 20-25ms before PUSH_IDLE and
+DPU teardown. Host cleanup stays late. After an attempted D3 write, avoid
+receiver compression writes and duplicate power-down accesses until next start.
+Read failure falls back to the existing path. Write failure still proceeds
+through idle and host cleanup. The sleep interval is experimental.
+
+diff --git a/drivers/gpu/drm/msm/dp/dp_ctrl.c b/drivers/gpu/drm/msm/dp/dp_ctrl.c
+--- a/drivers/gpu/drm/msm/dp/dp_ctrl.c
++++ b/drivers/gpu/drm/msm/dp/dp_ctrl.c
+@@ -29,6 +29,11 @@
+ #include "dp_tu_calc.h"
+ #include <drm/drm_fixed.h>
+ 
++static bool a14_dp_early_d3_test;
++module_param(a14_dp_early_d3_test, bool, 0444);
++MODULE_PARM_DESC(a14_dp_early_d3_test,
++	"Test A14 port-one receiver D3 before PUSH_IDLE and DPU shutdown");
++
+ static bool a14_dp_d3_before_dsc_test;
+ module_param(a14_dp_d3_before_dsc_test, bool, 0444);
+ MODULE_PARM_DESC(a14_dp_d3_before_dsc_test,
+@@ -188,6 +193,8 @@
+ 	struct msm_dp_dsc_cfg_data dsc_data;
+ 	bool dsc_configured;
+ 	bool a14_idle_completed;
++	/* 0: no early write; 1: accepted; negative: attempted with AUX error. */
++	int a14_early_d3_status;
+ 	u32 a14_state_trace_sequence;
+ };
+ 
+@@ -2543,7 +2550,7 @@
+ {
+ 	if (!ctrl->dsc_configured)
+ 		return;
+-	if (defer_sink_clear) {
++	if (defer_sink_clear || ctrl->a14_early_d3_status) {
+ 		/* Checked D0 + sink clear still run before the next link start. */
+ 		dev_info(ctrl->dev,
+ 			 "A14-DSC-blank: deferring sink DSC/FEC clear until next start\n");
+@@ -2560,6 +2567,50 @@
+ 	ctrl->dsc_configured = false;
+ }
+ 
++/* Called only from connected bridge disable, while video is still running. */
++void msm_dp_ctrl_a14_pre_idle_powerdown(struct msm_dp_ctrl *msm_dp_ctrl)
++{
++	struct msm_dp_ctrl_private *ctrl = container_of(msm_dp_ctrl,
++		struct msm_dp_ctrl_private, msm_dp_ctrl);
++	u8 power;
++	int ret;
++
++	if (!a14_dp_early_d3_test || !a14_dp_sink_power_test ||
++	    !a14_dp_sink_cleanup_test ||
++	    !msm_dp_ctrl_a14_wake_enabled(msm_dp_ctrl) ||
++	    !ctrl->dsc_configured || !ctrl->stream_clks_on ||
++	    !ctrl->link_clks_on || ctrl->a14_early_d3_status)
++		return;
++	if (ctrl->panel->dpcd[DP_DPCD_REV] < 0x11 ||
++	    ctrl->panel->dpcd[DP_DPCD_REV] == 0xff ||
++	    ctrl->link->sink_request & DP_TEST_LINK_PHY_TEST_PATTERN)
++		return;
++
++	ret = drm_dp_dpcd_readb(ctrl->aux, DP_SET_POWER, &power);
++	if (ret != 1) {
++		dev_warn(ctrl->dev,
++			 "A14-DSC-blank3: power read failed=%d; normal shutdown follows\n",
++			 ret < 0 ? ret : -EIO);
++		return;
++	}
++
++	power = (power & ~DP_SET_POWER_MASK) | DP_SET_POWER_D3;
++	ret = drm_dp_dpcd_writeb(ctrl->aux, DP_SET_POWER, power);
++	ctrl->a14_early_d3_status = ret == 1 ? 1 : (ret < 0 ? ret : -EIO);
++	if (ret != 1) {
++		/* D3 may have taken effect; suppress later sink accesses either way. */
++		dev_warn(ctrl->dev,
++			 "A14-DSC-blank3: early D3 write failed=%d; host shutdown continues\n",
++			 ctrl->a14_early_d3_status);
++		return;
++	}
++
++	dev_info(ctrl->dev,
++		 "A14-DSC-blank3: D3 accepted before PUSH_IDLE; settling with source intact\n");
++	/* Experimental allowance for muting, not a protocol timing requirement. */
++	usleep_range(20000, 25000);
++}
++
+ int msm_dp_ctrl_a14_sink_power(struct msm_dp_ctrl *msm_dp_ctrl, bool on)
+ {
+ 	struct msm_dp_ctrl_private *ctrl = container_of(msm_dp_ctrl,
+@@ -2575,6 +2626,17 @@
+ 	    ctrl->panel->dpcd[DP_DPCD_REV] == 0xff ||
+ 	    ctrl->link->sink_request & DP_TEST_LINK_PHY_TEST_PATTERN)
+ 		return 0;
++
++	if (on) {
++		/* Receiver accesses resume with the existing checked D0 path. */
++		ctrl->a14_early_d3_status = 0;
++	} else if (ctrl->a14_early_d3_status) {
++		/* The early write may already have put the receiver to sleep. */
++		dev_info(ctrl->dev,
++			 "A14-DSC-blank3: late host-only cleanup; no second D3 request\n");
++		msm_dp_ctrl_dsc_stop(ctrl, true);
++		return ctrl->a14_early_d3_status < 0 ? ctrl->a14_early_d3_status : 0;
++	}
+ 
+ 	/* Restrict the experiment to a successfully idled compressed stream. */
+ 	d3_before_dsc = !on && a14_dp_d3_before_dsc_test &&
+@@ -3376,6 +3438,7 @@
+ 
+ 	ctrl = container_of(msm_dp_ctrl, struct msm_dp_ctrl_private, msm_dp_ctrl);
+ 	ctrl->a14_idle_completed = false;
++	ctrl->a14_early_d3_status = 0;
+ 
+ 	rate = ctrl->panel->link_info.rate;
+ 	pixel_rate = ctrl->panel->msm_dp_mode.drm_mode.clock;
+@@ -3789,8 +3852,9 @@
+ 	msm_dp_panel_disable_vsc_sdp(ctrl->panel);
+ 	msm_dp_ctrl_dsc_stop(ctrl, false);
+ 
+-	/* set dongle to D3 (power off) mode */
+-	msm_dp_link_psm_config(ctrl->link, &ctrl->panel->link_info, true);
++	/* An earlier D3 attempt also covers a disconnect during shutdown. */
++	if (!ctrl->a14_early_d3_status)
++		msm_dp_link_psm_config(ctrl->link, &ctrl->panel->link_info, true);
+ 
+ 	msm_dp_ctrl_mainlink_disable(ctrl);
+ 
+diff --git a/drivers/gpu/drm/msm/dp/dp_ctrl.h b/drivers/gpu/drm/msm/dp/dp_ctrl.h
+--- a/drivers/gpu/drm/msm/dp/dp_ctrl.h
++++ b/drivers/gpu/drm/msm/dp/dp_ctrl.h
+@@ -20,6 +20,7 @@
+ bool msm_dp_ctrl_a14_transparent_enabled(struct msm_dp_ctrl *msm_dp_ctrl);
+ int msm_dp_ctrl_a14_init_transparent(struct msm_dp_ctrl *msm_dp_ctrl);
+ bool msm_dp_ctrl_a14_edp_retry_enabled(struct msm_dp_ctrl *msm_dp_ctrl);
++void msm_dp_ctrl_a14_pre_idle_powerdown(struct msm_dp_ctrl *msm_dp_ctrl);
+ int msm_dp_ctrl_a14_sink_power(struct msm_dp_ctrl *msm_dp_ctrl, bool on);
+ int msm_dp_ctrl_on_link(struct msm_dp_ctrl *msm_dp_ctrl);
+ int msm_dp_ctrl_on_stream(struct msm_dp_ctrl *msm_dp_ctrl, bool force_link_train);
+diff --git a/drivers/gpu/drm/msm/dp/dp_display.c b/drivers/gpu/drm/msm/dp/dp_display.c
+--- a/drivers/gpu/drm/msm/dp/dp_display.c
++++ b/drivers/gpu/drm/msm/dp/dp_display.c
+@@ -1752,6 +1752,9 @@
+ 	if (msm_dp_display->a14_enable_aborted)
+ 		return;
+ 
++	if (READ_ONCE(msm_dp_display->plugged))
++		msm_dp_ctrl_a14_pre_idle_powerdown(msm_dp_display->ctrl);
++
+ 	msm_dp_ctrl_push_idle(msm_dp_display->ctrl);
+ }
+ 
