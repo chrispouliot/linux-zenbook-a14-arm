@@ -5,4 +5,5 @@
   patch --batch --forward --fuzz=0 -p1 < ${../patches/a14-dsc-early-d3-test.patch}
   patch --batch --forward --fuzz=0 -p1 < ${../patches/a14-dp-direct-two-lane-test.patch}
   patch --batch --forward --fuzz=0 -p1 < ${../patches/a14-dp-realtek-idle-hold-test.patch}
+  patch --batch --forward --fuzz=0 -p1 < ${../patches/a14-dp-realtek-pre-idle-test.patch}
 ''
